@@ -1,0 +1,867 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DS203 Scope</title>
+<style>
+:root{
+  --bg:#0b0e13;--panel:#12161d;--panel2:#181d26;--line:#252c38;--grid:#1f2733;--grid2:#2c3646;
+  --text:#d7dde8;--dim:#7d8799;--a:#ffd33d;--b:#2ee6f0;--accent:#4c9aff;--ok:#3ddc84;--err:#ff5d6c;--warn:#ffb020;
+  --plot:#080b10;
+  --mono:ui-monospace,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+}
+@media (prefers-color-scheme:light){
+  :root{--bg:#eef1f5;--panel:#fff;--panel2:#f3f5f9;--line:#d5dbe5;--grid:#dde3ec;--grid2:#b9c3d3;
+    --text:#1c2330;--dim:#6a7487;--a:#b78600;--b:#0687a0;--accent:#1c6ed5;--ok:#13874a;--err:#d12b3c;--warn:#b86e00;--plot:#fbfcfe}
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font:13px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+#app{display:grid;grid-template-rows:auto auto 1fr auto;height:100vh}
+header{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:8px 12px;background:var(--panel);border-bottom:1px solid var(--line)}
+header h1{font-size:14px;margin:0 10px 0 0;letter-spacing:.06em;font-family:var(--mono)}
+header .sep{flex:1}
+button,select,input[type=text]{font:inherit;color:var(--text);background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:5px 10px}
+button{cursor:pointer}
+button:hover:not(:disabled){border-color:var(--accent)}
+button:disabled{opacity:.45;cursor:default}
+button.on{background:var(--accent);border-color:var(--accent);color:#fff}
+button.go{border-color:var(--ok);color:var(--ok)}button.stop{border-color:var(--err);color:var(--err)}
+#banner{padding:8px 14px;background:color-mix(in srgb,var(--warn) 18%,var(--panel));border-bottom:1px solid var(--warn);color:var(--text)}
+#banner[hidden]{display:none}
+main{display:grid;grid-template-columns:minmax(0,1fr) 310px;min-height:0}
+.display{display:flex;flex-direction:column;gap:8px;padding:10px;min-height:0;overflow:auto}
+#readout{font-family:var(--mono);font-size:12px;min-height:2.8em;color:var(--dim);display:flex;flex-wrap:wrap;gap:4px 18px}
+#readout b{color:var(--text);font-weight:500}.ra{color:var(--a)}.rb{color:var(--b)}
+.cwrap{position:relative;flex:1 1 360px;min-height:300px;background:var(--plot);border:1px solid var(--line);border-radius:8px;overflow:hidden}
+canvas{position:absolute;inset:0;width:100%;height:100%;display:block;touch-action:none}
+#fftwrap{flex:0 0 190px;position:relative;background:var(--plot);border:1px solid var(--line);border-radius:8px;overflow:hidden}
+#fftwrap[hidden]{display:none}
+table{border-collapse:collapse;font-family:var(--mono);font-size:12px;width:100%}
+th,td{padding:3px 8px;text-align:right;border-bottom:1px solid var(--line)}th:first-child,td:first-child{text-align:left}
+th{color:var(--dim);font-weight:500}
+.note{color:var(--dim);font-size:11px}
+#console{background:var(--panel);border:1px solid var(--line);border-radius:8px;display:flex;flex-direction:column;flex:0 0 170px;min-height:120px}
+#log{flex:1;overflow:auto;padding:6px 8px;font-family:var(--mono);font-size:11.5px;white-space:pre-wrap;word-break:break-all}
+#log .tx{color:var(--accent)}#log .rx{color:var(--text)}#log .err{color:var(--err)}#log .info{color:var(--dim)}
+#sendrow{display:flex;gap:6px;padding:6px;border-top:1px solid var(--line)}
+#sendrow input{flex:1;font-family:var(--mono)}
+aside{padding:10px 10px 10px 0;overflow:auto;display:flex;flex-direction:column;gap:10px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 12px}
+.card h2{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);margin:0 0 8px;display:flex;align-items:center;gap:8px}
+.card.a h2{color:var(--a)}.card.b h2{color:var(--b)}
+.row{display:grid;grid-template-columns:70px 1fr;gap:6px 8px;align-items:center;margin:5px 0}
+.row label{color:var(--dim)}
+.row select,.row input[type=range]{width:100%;min-width:0}
+.row .val{font-family:var(--mono);color:var(--text);font-size:11px}
+input[type=range]{accent-color:var(--accent)}
+.btns{display:flex;gap:6px;flex-wrap:wrap}
+footer{display:flex;flex-wrap:wrap;gap:4px 18px;padding:5px 12px;background:var(--panel);border-top:1px solid var(--line);font-family:var(--mono);font-size:11.5px;color:var(--dim)}
+footer b{color:var(--text);font-weight:500}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--err);margin-right:5px}
+.dot.ok{background:var(--ok)}
+@media (max-width:900px){
+  #app{height:auto}main{grid-template-columns:1fr}aside{padding:0 10px 10px}
+  .cwrap{flex-basis:300px}
+}
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>DS203 SCOPE</h1>
+    <button id="bConnect">Connect</button>
+    <button id="bDemo">Demo</button>
+    <button id="bRun" class="go">Run</button>
+    <button id="bStop" class="stop">Stop</button>
+    <button id="bSingle">Single</button>
+    <button id="bLive" title="Pause/resume acquisition without sending RUN/STOP">Live</button>
+    <span class="sep"></span>
+    <button id="bCursors">Cursors</button>
+    <button id="bFft">FFT</button>
+    <button id="bCsv">CSV</button>
+    <button id="bPng">PNG</button>
+  </header>
+  <div id="banner" hidden></div>
+  <main>
+    <section class="display">
+      <div id="readout"></div>
+      <div class="cwrap"><canvas id="scope"></canvas></div>
+      <div id="fftwrap" hidden><canvas id="fft"></canvas></div>
+      <table id="meas">
+        <thead><tr><th>Ch</th><th>Min</th><th>Max</th><th>Vpp</th><th>Mean</th><th>RMS</th><th>Freq</th><th>Period</th><th>Duty</th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <div class="note">Values are raw 8-bit ADC counts (0-255), not volts. Time axis is approximate: time/div x 10 divisions spread over all N captured samples. Wheel = zoom, drag = pan, double-click = reset.</div>
+      <div id="console">
+        <div id="log"></div>
+        <form id="sendrow"><input type="text" id="raw" placeholder="raw command, e.g. STATE?" autocomplete="off" spellcheck="false"><button>Send</button></form>
+      </div>
+    </section>
+    <aside>
+      <div class="card a"><h2>CH A <label style="margin-left:auto;text-transform:none;letter-spacing:0"><input type="checkbox" id="enA" checked> show</label></h2>
+        <div class="row"><label>Range</label><select id="rangeA"></select></div>
+        <div class="row"><label>Offset</label><div><input type="range" id="offA" min="0" max="200" value="150"><span class="val" id="offAv"></span></div></div>
+        <div class="row"><label>Coupling</label><select id="coupA"><option value="DC">DC</option><option value="AC">AC</option></select></div>
+      </div>
+      <div class="card b"><h2>CH B <label style="margin-left:auto;text-transform:none;letter-spacing:0"><input type="checkbox" id="enB" checked> show</label></h2>
+        <div class="row"><label>Range</label><select id="rangeB"></select></div>
+        <div class="row"><label>Offset</label><div><input type="range" id="offB" min="0" max="200" value="100"><span class="val" id="offBv"></span></div></div>
+        <div class="row"><label>Coupling</label><select id="coupB"><option value="DC">DC</option><option value="AC">AC</option></select></div>
+      </div>
+      <div class="card"><h2>Timebase</h2>
+        <div class="row"><label>Time/div</label><select id="tb"></select></div>
+        <div class="row"><label>Mode</label><select id="mode"></select></div>
+      </div>
+      <div class="card"><h2>Trigger</h2>
+        <div class="row"><label>Source</label><select id="tsrc"><option>A</option><option>B</option><option>C</option><option>D</option></select></div>
+        <div class="row"><label>Kind</label><select id="tkind"></select></div>
+        <div class="row"><label>Level</label><div><input type="range" id="tlevel" min="0" max="200" value="100"><span class="val" id="tlevelv"></span></div></div>
+      </div>
+      <div class="card"><h2>Device</h2>
+        <div class="btns"><button id="bState">Read STATE?</button><button id="bTables">Read TABLES?</button></div>
+      </div>
+    </aside>
+  </main>
+  <footer>
+    <span><span class="dot" id="dot"></span><b id="sConn">disconnected</b></span>
+    <span>ID <b id="sIdn">-</b></span>
+    <span>FPS <b id="sFps">0</b></span>
+    <span>acq <b id="sAcq">-</b></span>
+    <span>DIAG <b id="sDiag">-</b></span>
+  </footer>
+</div>
+
+<script>
+"use strict";
+// ==PURE-BEGIN==
+const TB_SECONDS=[1,.5,.2,.1,.05,.02,.01,.005,.002,.001,5e-4,2e-4,1e-4,5e-5,2e-5,1e-5,5e-6,2e-6,1e-6,5e-7,2e-7,1e-7];
+const MODES={1:"AUTO",2:"NORM",3:"NORM-CL",4:"PERSIST",5:"SINGLE"};
+const TRIG_KINDS=["falling edge","rising edge","< Vt","> Vt","L < [T1,T2]","L > [T1,T2]","H < [T1,T2]","H > [T1,T2]","GEN"];
+
+class DeviceError extends Error{}
+
+class ByteQueue{
+  constructor(){this.buf=new Uint8Array(0);this.waiter=null}
+  push(u8){
+    const n=new Uint8Array(this.buf.length+u8.length);n.set(this.buf);n.set(u8,this.buf.length);this.buf=n;
+    if(this.waiter)this.waiter();
+  }
+  clear(){this.buf=new Uint8Array(0)}
+  _wait(ms){
+    return new Promise(res=>{
+      const t=setTimeout(()=>{this.waiter=null;res()},ms);
+      this.waiter=()=>{clearTimeout(t);this.waiter=null;res()};
+    });
+  }
+  async readExact(n,timeoutMs){
+    const end=Date.now()+timeoutMs;
+    while(this.buf.length<n){
+      const left=end-Date.now();
+      if(left<=0)throw new Error(`timed out after ${this.buf.length} of ${n} bytes`);
+      await this._wait(left);
+    }
+    const out=this.buf.slice(0,n);this.buf=this.buf.slice(n);return out;
+  }
+  async readLine(timeoutMs){
+    const end=Date.now()+timeoutMs;let scanned=0;
+    for(;;){
+      const i=this.buf.indexOf(10,scanned);
+      if(i>=0){
+        const line=String.fromCharCode(...this.buf.slice(0,i)).replace(/\r/g,"").trim();
+        this.buf=this.buf.slice(i+1);return line;
+      }
+      scanned=this.buf.length;
+      const left=end-Date.now();
+      if(left<=0)throw new Error(`no reply (got ${JSON.stringify(String.fromCharCode(...this.buf.slice(0,64)))})`);
+      await this._wait(left);
+    }
+  }
+}
+
+function parseCapHeader(line){
+  const m=/^#CAP (\d+) (\d+)$/.exec(line);
+  if(!m)return null;
+  const n=+m[1],bps=+m[2];
+  if((bps!==2&&bps!==3)||n<1||n>1<<20)return null;
+  return {n,bps};
+}
+
+function deinterleave(data,n,bps){
+  const a=new Uint8Array(n),b=new Uint8Array(n),d=bps===3?new Uint8Array(n):null;
+  for(let i=0;i<n;i++){a[i]=data[i*bps];b[i]=data[i*bps+1];if(d)d[i]=data[i*bps+2]}
+  return {n,a,b,d};
+}
+
+// Mirrors tools/ds203.py capture(): header line, n*bps bytes, "\nOK\n" trailer. Request must already be sent.
+async function readCapFrame(q){
+  const hdr=await q.readLine(2000);
+  const h=parseCapHeader(hdr);
+  if(!h)throw new DeviceError(hdr||"empty reply");
+  const data=await q.readExact(h.n*h.bps,5000);
+  const tail=await q.readExact(4,2000);
+  if(String.fromCharCode(...tail)!=="\nOK\n")throw new Error("bad frame trailer "+JSON.stringify(String.fromCharCode(...tail)));
+  return deinterleave(data,h.n,h.bps);
+}
+
+function parseKV(line){
+  const o={};
+  for(const t of line.trim().split(/\s+/)){const m=/^([A-Za-z]+)=(-?\d+)$/.exec(t);if(m)o[m[1]]=+m[2]}
+  return o;
+}
+
+function parseTables(line){
+  const m=/^TABLES\s+V=(.*?)\s+T=(.*)$/.exec(line.trim());
+  if(!m)return null;
+  const split=s=>s.split(/[\s,]+/).filter(Boolean);
+  return {V:split(m[1]),T:split(m[2])};
+}
+
+function fmtSI(v,unit,digits=3){
+  if(v==null||!isFinite(v))return "-";
+  if(v===0)return "0 "+unit;
+  const p=[[1e9,"G"],[1e6,"M"],[1e3,"k"],[1,""],[1e-3,"m"],[1e-6,"u"],[1e-9,"n"]];
+  const a=Math.abs(v);
+  for(const [s,x] of p)if(a>=s*0.9995)return (v/s).toPrecision(digits)+" "+x+unit;
+  return (v/1e-9).toPrecision(digits)+" n"+unit;
+}
+
+// Hysteretic mid-level crossings, linearly interpolated to fractional sample positions.
+function findCrossings(x,lo,hi,mid){
+  const rise=[],fall=[];
+  let st=0;
+  for(let i=0;i<x.length;i++){
+    const v=x[i];
+    if(v>hi&&st===-1){
+      let j=i;while(j>0&&x[j-1]>=mid)j--;
+      rise.push(j>0?j-1+(mid-x[j-1])/(x[j]-x[j-1]):j);
+      st=1;
+    }else if(v<lo&&st===1){
+      let j=i;while(j>0&&x[j-1]<=mid)j--;
+      fall.push(j>0?j-1+(x[j-1]-mid)/(x[j-1]-x[j]):j);
+      st=-1;
+    }else if(st===0){st=v>mid?1:-1}
+  }
+  return {rise,fall};
+}
+
+function measure(x,dt){
+  const n=x.length;
+  let min=255,max=0,sum=0,sq=0;
+  for(let i=0;i<n;i++){const v=x[i];if(v<min)min=v;if(v>max)max=v;sum+=v;sq+=v*v}
+  const r={min,max,vpp:max-min,mean:sum/n,rms:Math.sqrt(sq/n),freq:null,period:null,duty:null};
+  if(r.vpp<4)return r;
+  const mid=(min+max)/2,h=r.vpp*0.1;
+  const {rise,fall}=findCrossings(x,mid-h,mid+h,mid);
+  if(rise.length>=2){
+    const ps=(rise[rise.length-1]-rise[0])/(rise.length-1);
+    r.period=ps*dt;r.freq=1/r.period;
+    const duties=[];
+    for(let k=0;k+1<rise.length;k++){
+      const f=fall.find(v=>v>rise[k]&&v<rise[k+1]);
+      if(f!==undefined)duties.push((f-rise[k])/(rise[k+1]-rise[k]));
+    }
+    if(duties.length)r.duty=duties.reduce((s,v)=>s+v,0)/duties.length;
+  }
+  return r;
+}
+
+function fft(re,im){
+  const n=re.length;
+  for(let i=1,j=0;i<n;i++){
+    let bit=n>>1;for(;j&bit;bit>>=1)j^=bit;j^=bit;
+    if(i<j){let t=re[i];re[i]=re[j];re[j]=t;t=im[i];im[i]=im[j];im[j]=t}
+  }
+  for(let len=2;len<=n;len<<=1){
+    const ang=-2*Math.PI/len,wr=Math.cos(ang),wi=Math.sin(ang);
+    for(let i=0;i<n;i+=len){
+      let cr=1,ci=0;
+      for(let k=0;k<len/2;k++){
+        const a=i+k,b=a+len/2;
+        const tr=re[b]*cr-im[b]*ci,ti=re[b]*ci+im[b]*cr;
+        re[b]=re[a]-tr;im[b]=im[a]-ti;re[a]+=tr;im[a]+=ti;
+        const nr=cr*wr-ci*wi;ci=cr*wi+ci*wr;cr=nr;
+      }
+    }
+  }
+}
+
+// dB relative to a 127.5-count sine (full scale); fs in Hz.
+function spectrum(x,fs){
+  let n=1;while(n*2<=x.length)n*=2;
+  let mean=0;for(let i=0;i<n;i++)mean+=x[i];mean/=n;
+  const re=new Float64Array(n),im=new Float64Array(n);
+  let sw=0;
+  for(let i=0;i<n;i++){const w=0.5-0.5*Math.cos(2*Math.PI*i/n);sw+=w;re[i]=(x[i]-mean)*w}
+  fft(re,im);
+  const db=new Float32Array(n/2);
+  for(let k=0;k<n/2;k++)db[k]=20*Math.log10(Math.max(2*Math.hypot(re[k],im[k])/sw/127.5,1e-6));
+  return {db,df:fs/n,n};
+}
+// ==PURE-END==
+
+// ---------- globals ----------
+const $=id=>document.getElementById(id);
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+const q=new ByteQueue();
+const S={
+  port:null,writer:null,reader:null,readLoop:null,connected:false,demo:false,live:false,loop:null,
+  dev:{RA:5,RB:1,OA:150,OB:100,CA:0,CB:0,TB:9,MODE:1,TSRC:0,TKIND:1,TLEVEL:100,AO:54,N:4096,RUN:1},
+  tables:{V:[],T:[]},strategy:null,frame:null,view:{vs:0,vl:4096},
+  cur:{on:false,x1:null,x2:null},show:{a:true,b:true},fft:false,hover:null,tasks:Promise.resolve(),
+  frames:[],scan:false
+};
+
+// ---------- settings ----------
+const SKEY="ds203.settings";
+function saveSettings(){
+  try{
+    localStorage.setItem(SKEY,JSON.stringify({
+      show:S.show,fft:S.fft,curOn:S.cur.on,dev:S.dev,
+    }));
+  }catch(e){}
+}
+function loadSettings(){
+  try{
+    const s=JSON.parse(localStorage.getItem(SKEY)||"null");
+    if(!s)return;
+    if(s.show)S.show={a:!!s.show.a,b:!!s.show.b};
+    S.fft=!!s.fft;S.cur.on=!!s.curOn;
+    if(s.dev)for(const k of Object.keys(S.dev))if(Number.isFinite(s.dev[k]))S.dev[k]=s.dev[k];
+  }catch(e){}
+}
+
+// ---------- console ----------
+function log(cls,text){
+  const el=$("log"),d=document.createElement("div");
+  d.className=cls;d.textContent=text;el.appendChild(d);
+  while(el.childNodes.length>400)el.removeChild(el.firstChild);
+  el.scrollTop=el.scrollHeight;
+}
+
+// ---------- transport ----------
+const hasSerial=typeof navigator!=="undefined"&&"serial" in navigator;
+async function writeLine(s){await S.writer.write(new TextEncoder().encode(s+"\n"))}
+
+// All device access goes through enqueue(): one request/response at a time.
+function enqueue(fn){
+  const p=S.tasks.then(fn);
+  S.tasks=p.catch(()=>{});
+  return p;
+}
+
+async function txrx(line,quiet){
+  q.clear();
+  if(!quiet)log("tx",line);
+  await writeLine(line);
+  const r=await q.readLine(2000);
+  if(!quiet||r.startsWith("ERR"))log(r.startsWith("ERR")?"err":"rx",r);
+  if(/^ERR mode/i.test(r))showScanBanner(true);
+  return r;
+}
+const cmd=(line,quiet)=>enqueue(()=>txrx(line,quiet));
+
+async function capRaw(){
+  q.clear();
+  await writeLine("CAP?");
+  try{return await readCapFrame(q)}
+  catch(e){
+    if(!(e instanceof DeviceError)){await sleep(150);q.clear()}
+    throw e;
+  }
+}
+
+// ISOLATED WORKAROUND: CAP? while RUNning returns "ERR timeout" on current firmware.
+// Try plain CAP? first; on timeout fall back to STOP, CAP?, RUN. Simplify once firmware is fixed.
+async function acquireFrame(single){
+  const viaStop=async()=>{
+    await txrx("STOP",true);
+    try{return await capRaw()}
+    finally{if(!single)await txrx("RUN",true)}
+  };
+  if(single||S.strategy==="stop")return viaStop();
+  try{
+    const f=await capRaw();S.strategy="plain";return f;
+  }catch(e){
+    if(!(e instanceof DeviceError&&/timeout/i.test(e.message)))throw e;
+    if(S.strategy===null)S.strategy="stop";
+    return viaStop();
+  }
+}
+
+async function connect(){
+  if(!hasSerial)return;
+  if(S.demo)setDemo(false);
+  try{
+    S.port=await navigator.serial.requestPort();
+    await S.port.open({baudRate:115200});
+  }catch(e){log("err","connect: "+e.message);return}
+  S.writer=S.port.writable.getWriter();
+  S.reader=S.port.readable.getReader();
+  S.readLoop=(async()=>{
+    try{for(;;){const {value,done}=await S.reader.read();if(done)break;if(value)q.push(value)}}
+    catch(e){log("err","read: "+e.message)}
+  })();
+  S.connected=true;S.strategy=null;q.clear();
+  setConn("connected");updateButtons();
+  try{
+    await sleep(100);
+    $("sIdn").textContent=await cmd("*IDN?");
+    const t=parseTables(await cmd("TABLES?"));
+    if(t){S.tables=t;buildSelects()}
+    await readState();
+  }catch(e){log("err","handshake: "+e.message);await disconnect()}
+}
+
+async function disconnect(){
+  const was=S.connected;
+  S.live=false;
+  if(S.loop)await S.loop;
+  S.connected=false;
+  try{await S.reader?.cancel()}catch(e){}
+  try{await S.readLoop}catch(e){}
+  try{S.reader?.releaseLock()}catch(e){}
+  try{S.writer?.releaseLock()}catch(e){}
+  try{await S.port?.close()}catch(e){}
+  S.port=S.writer=S.reader=null;
+  if(was)log("info","disconnected");
+  setConn("disconnected");$("sIdn").textContent="-";updateButtons();
+}
+
+async function readState(){
+  const r=await cmd("STATE?");
+  if(!r.startsWith("STATE"))return;
+  const kv=parseKV(r);
+  Object.assign(S.dev,kv);
+  showScanBanner(kv.MODE===0);
+  applyDevToControls();draw();
+}
+
+// ---------- acquisition loop ----------
+function setFrame(f){
+  const tb=S.dev.TB;
+  if(!S.frame||S.frame.n!==f.n){S.view={vs:0,vl:f.n};if(S.cur.x1==null){S.cur.x1=f.n*0.3;S.cur.x2=f.n*0.6}}
+  S.frame={...f,tpd:TB_SECONDS[tb]??1e-3,tb};
+  const now=performance.now();S.frames.push(now);
+  while(S.frames.length&&now-S.frames[0]>1000)S.frames.shift();
+  schedule();
+}
+
+function startLoop(){
+  if(S.loop)return;
+  S.loop=(async()=>{
+    while(S.live){
+      try{
+        const f=S.demo?demoFrame():await enqueue(()=>acquireFrame(false));
+        setFrame(f);
+      }catch(e){log("err","acquire: "+e.message);await sleep(300)}
+      await sleep(S.demo?33:0);
+    }
+    S.loop=null;
+  })();
+}
+
+async function setLive(on){
+  S.live=on;
+  if(on)startLoop();else if(S.loop)await S.loop;
+  updateButtons();
+}
+
+async function doRun(){
+  if(!S.connected&&!S.demo)return log("info","connect or enable demo first");
+  if(S.connected)await cmd("RUN");
+  await setLive(true);
+}
+async function doStop(){
+  await setLive(false);
+  if(S.connected)await cmd("STOP");
+}
+async function doSingle(){
+  if(!S.connected&&!S.demo)return log("info","connect or enable demo first");
+  await setLive(false);
+  try{setFrame(S.demo?demoFrame():await enqueue(()=>acquireFrame(true)))}
+  catch(e){log("err","single: "+e.message)}
+}
+const toggleRun=()=>S.live?doStop():doRun();
+
+// ---------- demo ----------
+function demoFrame(){
+  const n=4096,t=performance.now()/1000,a=new Uint8Array(n),b=new Uint8Array(n);
+  const ca=S.dev.AO+S.dev.OA,cb=S.dev.AO+S.dev.OB,noise=()=>(Math.random()+Math.random()+Math.random()-1.5)*3;
+  for(let i=0;i<n;i++){
+    const ph=((i/n)*8+t*0.3)%1;
+    a[i]=Math.max(0,Math.min(255,Math.round(ca+(ph<0.3?38:-38)+noise())));
+    b[i]=Math.max(0,Math.min(255,Math.round(cb+30*Math.sin(2*Math.PI*(i/n*13+t*0.7))+noise())));
+  }
+  return {n,a,b,d:null};
+}
+function setDemo(on){
+  if(on&&S.connected)return;
+  S.demo=on;
+  if(on){setConn("demo");setLive(true)}
+  else{setLive(false);setConn(S.connected?"connected":"disconnected")}
+  updateButtons();
+}
+
+// ---------- controls ----------
+function opt(sel,items,cur){
+  sel.innerHTML="";
+  items.forEach(([v,l])=>{const o=document.createElement("option");o.value=v;o.textContent=l;sel.appendChild(o)});
+  sel.value=String(cur);
+}
+function buildSelects(){
+  const nV=S.tables.V.length||12;
+  const rng=Array.from({length:nV},(_,i)=>[i,S.tables.V[i]?`${i}: ${S.tables.V[i]}`:String(i)]);
+  opt($("rangeA"),rng,S.dev.RA);opt($("rangeB"),rng,S.dev.RB);
+  const tbl=TB_SECONDS.map((s,i)=>[i,`${i}: ${fmtSI(s,"s",2)}/div`+(S.tables.T.length===22&&S.tables.T[i]?` (${S.tables.T[i]})`:"")]);
+  opt($("tb"),tbl,S.dev.TB);
+  opt($("mode"),Object.entries(MODES).map(([k,v])=>[k,`${k}: ${v}`]),S.dev.MODE);
+  opt($("tkind"),TRIG_KINDS.map((s,i)=>[i,`${i}: ${s}`]),S.dev.TKIND);
+}
+function applyDevToControls(){
+  const d=S.dev;
+  $("rangeA").value=d.RA;$("rangeB").value=d.RB;
+  $("offA").value=d.OA;$("offB").value=d.OB;$("tlevel").value=d.TLEVEL;
+  $("coupA").value=d.CA===1?"AC":"DC";$("coupB").value=d.CB===1?"AC":"DC";
+  $("tb").value=d.TB;$("mode").value=d.MODE>=1&&d.MODE<=5?d.MODE:"";
+  $("tsrc").value="ABCD"[d.TSRC]||"A";$("tkind").value=d.TKIND;
+  $("offAv").textContent=" "+d.OA;$("offBv").textContent=" "+d.OB;$("tlevelv").textContent=" "+d.TLEVEL;
+}
+
+async function setDev(line,apply){
+  if(S.connected){
+    try{if(await cmd(line)!=="OK")return readState()}catch(e){log("err",e.message);return}
+  }else log("info","(offline) "+line);
+  apply();saveSettings();draw();
+}
+
+function bindControls(){
+  const num=(id,line,key,valId)=>{
+    const el=$(id);
+    el.addEventListener("input",()=>{if(valId)$(valId).textContent=" "+el.value});
+    el.addEventListener("change",()=>setDev(line(el.value),()=>{S.dev[key]=+el.value}));
+  };
+  num("rangeA",v=>`CH A RANGE ${v}`,"RA");num("rangeB",v=>`CH B RANGE ${v}`,"RB");
+  num("offA",v=>`CH A OFFSET ${v}`,"OA","offAv");num("offB",v=>`CH B OFFSET ${v}`,"OB","offBv");
+  num("tb",v=>`TB ${v}`,"TB");num("mode",v=>`MODE ${v}`,"MODE");
+  num("tkind",v=>`TRIG KIND ${v}`,"TKIND");num("tlevel",v=>`TRIG LEVEL ${v}`,"TLEVEL","tlevelv");
+  $("coupA").onchange=e=>setDev(`CH A COUPLE ${e.target.value}`,()=>{S.dev.CA=e.target.value==="AC"?1:0});
+  $("coupB").onchange=e=>setDev(`CH B COUPLE ${e.target.value}`,()=>{S.dev.CB=e.target.value==="AC"?1:0});
+  $("tsrc").onchange=e=>setDev(`TRIG SRC ${e.target.value}`,()=>{S.dev.TSRC="ABCD".indexOf(e.target.value)});
+  $("enA").onchange=e=>{S.show.a=e.target.checked;saveSettings();draw()};
+  $("enB").onchange=e=>{S.show.b=e.target.checked;saveSettings();draw()};
+
+  $("bConnect").onclick=()=>S.connected?disconnect():connect();
+  $("bDemo").onclick=()=>setDemo(!S.demo);
+  $("bRun").onclick=doRun;$("bStop").onclick=doStop;$("bSingle").onclick=doSingle;
+  $("bLive").onclick=()=>{if(S.connected||S.demo)setLive(!S.live)};
+  $("bCursors").onclick=()=>{S.cur.on=!S.cur.on;saveSettings();updateButtons();draw()};
+  $("bFft").onclick=()=>{S.fft=!S.fft;saveSettings();updateButtons();resize()};
+  $("bCsv").onclick=exportCsv;$("bPng").onclick=exportPng;
+  $("bState").onclick=()=>S.connected&&readState();
+  $("bTables").onclick=async()=>{
+    if(!S.connected)return;
+    const t=parseTables(await cmd("TABLES?"));if(t){S.tables=t;buildSelects();applyDevToControls()}
+  };
+  $("sendrow").onsubmit=async e=>{
+    e.preventDefault();
+    const v=$("raw").value.trim();if(!v)return;
+    $("raw").value="";
+    if(!S.connected)return log("info","not connected");
+    try{await cmd(v)}catch(err){log("err",err.message)}
+  };
+  document.addEventListener("keydown",e=>{
+    if(e.ctrlKey||e.metaKey||e.altKey||/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName))return;
+    if(e.key===" "){e.preventDefault();toggleRun()}
+    else if(e.key==="s")doSingle();
+    else if(e.key==="c")$("bConnect").click();
+  });
+}
+
+function updateButtons(){
+  const on=S.connected||S.demo;
+  $("bConnect").textContent=S.connected?"Disconnect":"Connect";
+  $("bConnect").disabled=!hasSerial;
+  $("bDemo").classList.toggle("on",S.demo);$("bDemo").disabled=S.connected;
+  for(const id of ["bRun","bStop","bSingle","bLive"])$(id).disabled=!on;
+  $("bLive").textContent=S.live?"Live":"Frozen";$("bLive").classList.toggle("on",S.live&&on);
+  $("bCursors").classList.toggle("on",S.cur.on);$("bFft").classList.toggle("on",S.fft);
+  $("bCsv").disabled=$("bPng").disabled=false;
+  for(const id of ["bState","bTables"])$(id).disabled=!S.connected;
+}
+function setConn(t){
+  $("sConn").textContent=t;$("dot").classList.toggle("ok",t!=="disconnected");
+}
+function showScanBanner(on){
+  S.scan=on;const b=$("banner");
+  if(!hasSerial){
+    b.hidden=false;
+    b.textContent="Web Serial API not available. Use Chrome or Edge, served from http://localhost or https. Demo mode still works.";
+    return;
+  }
+  b.hidden=!on;
+  b.textContent="Scope is in SCAN (roll) mode: MODE and TB commands return ERR mode. Set the trigger mode to AUTO on the device (hold button ^ for the T-BASE menu).";
+}
+
+// ---------- status polling ----------
+async function pollDiag(){
+  if(!S.connected||S.live)return;
+  try{
+    const r=await cmd("DIAG?",true);
+    $("sDiag").textContent=r.replace(/^DIAG\s*/,"");
+    const st=await cmd("STATE?",true);
+    if(st.startsWith("STATE")){const kv=parseKV(st);showScanBanner(kv.MODE===0)}
+  }catch(e){}
+}
+
+// ---------- measurements / readout ----------
+function updateMeasurements(){
+  const f=S.frame,tb=$("meas").tBodies[0];
+  if(!f){tb.innerHTML="";return}
+  const dt=f.tpd*10/f.n;
+  const rows=[["A","ra",f.a,S.show.a],["B","rb",f.b,S.show.b]];
+  tb.innerHTML="";
+  for(const [name,cls,x,en] of rows){
+    if(!en)continue;
+    const m=measure(x,dt),tr=document.createElement("tr");
+    const c=[name,m.min,m.max,m.vpp,m.mean.toFixed(1),m.rms.toFixed(1),
+      m.freq==null?"-":fmtSI(m.freq,"Hz"),m.period==null?"-":fmtSI(m.period,"s"),m.duty==null?"-":(m.duty*100).toFixed(1)+" %"];
+    c.forEach((t,i)=>{const td=document.createElement("td");td.textContent=t;if(i===0)td.className=cls;tr.appendChild(td)});
+    tb.appendChild(tr);
+  }
+}
+function updateReadout(){
+  const f=S.frame,el=$("readout");
+  const parts=[];
+  const add=(html)=>parts.push(html);
+  if(!f){el.textContent="No data. Connect, or enable Demo.";return}
+  const dt=f.tpd*10/f.n;
+  const v=(arr,i)=>arr[Math.max(0,Math.min(f.n-1,Math.round(i)))];
+  const view=S.view;
+  add(`N <b>${f.n}</b>`);
+  add(`zoom <b>${(f.n/view.vl).toFixed(1)}x</b>`);
+  add(`~<b>${fmtSI(f.tpd*view.vl/f.n,"s")}/div</b>`);
+  if(S.hover!=null){
+    const i=S.hover;
+    add(`cursor <b>#${Math.round(i)}</b> ~<b>${fmtSI(i*dt,"s")}</b> <span class="ra">A=${v(f.a,i)}</span> <span class="rb">B=${v(f.b,i)}</span>`);
+  }
+  if(S.cur.on&&S.cur.x1!=null){
+    const {x1,x2}=S.cur,d=Math.abs(x2-x1)*dt;
+    add(`dX <b>${fmtSI(d,"s")}</b> 1/dX <b>${d>0?fmtSI(1/d,"Hz"):"-"}</b>`);
+    add(`<span class="ra">A ${v(f.a,x1)}/${v(f.a,x2)} d${v(f.a,x2)-v(f.a,x1)}</span> <span class="rb">B ${v(f.b,x1)}/${v(f.b,x2)} d${v(f.b,x2)-v(f.b,x1)}</span>`);
+  }
+  el.innerHTML=parts.join(" ");
+}
+
+// ---------- drawing ----------
+let dirty=false;
+function schedule(){if(!dirty){dirty=true;requestAnimationFrame(()=>{dirty=false;draw();updateMeasurements();updateReadout();drawFft();$("sFps").textContent=S.frames.length})}}
+const css=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+function fitCanvas(cv){
+  const dpr=window.devicePixelRatio||1,w=cv.clientWidth,h=cv.clientHeight;
+  if(cv.width!==Math.round(w*dpr)||cv.height!==Math.round(h*dpr)){cv.width=Math.round(w*dpr);cv.height=Math.round(h*dpr)}
+  const ctx=cv.getContext("2d");ctx.setTransform(dpr,0,0,dpr,0,0);
+  return {ctx,w,h};
+}
+function plotRect(w,h){return {l:50,t:10,w:Math.max(10,w-50-14),h:Math.max(10,h-10-26)}}
+const xOf=(i,p)=>p.l+(i-S.view.vs)/S.view.vl*p.w;
+const idxOf=(x,p)=>S.view.vs+(x-p.l)/p.w*S.view.vl;
+const yOf=(code,p)=>p.t+p.h*(1-code/256);
+
+function drawGrid(ctx,p){
+  ctx.lineWidth=1;
+  for(let k=0;k<=10;k++){
+    const x=Math.round(p.l+p.w*k/10)+.5;
+    ctx.strokeStyle=k===5?css("--grid2"):css("--grid");
+    ctx.beginPath();ctx.moveTo(x,p.t);ctx.lineTo(x,p.t+p.h);ctx.stroke();
+  }
+  for(let k=0;k<=8;k++){
+    const y=Math.round(p.t+p.h*k/8)+.5;
+    ctx.strokeStyle=k===4?css("--grid2"):css("--grid");
+    ctx.beginPath();ctx.moveTo(p.l,y);ctx.lineTo(p.l+p.w,y);ctx.stroke();
+  }
+  ctx.strokeStyle=css("--grid2");ctx.beginPath();
+  for(let k=0;k<=50;k++){const x=p.l+p.w*k/50,y=p.t+p.h/2;ctx.moveTo(x,y-3);ctx.lineTo(x,y+3)}
+  for(let k=0;k<=40;k++){const y=p.t+p.h*k/40,x=p.l+p.w/2;ctx.moveTo(x-3,y);ctx.lineTo(x+3,y)}
+  ctx.stroke();
+}
+function drawLabels(ctx,p,w,h){
+  ctx.fillStyle=css("--dim");ctx.font="11px "+css("--mono");
+  ctx.textAlign="right";ctx.textBaseline="middle";
+  for(let k=0;k<=8;k++)ctx.fillText(String(256-32*k),p.l-6,p.t+p.h*k/8);
+  ctx.textAlign="center";ctx.textBaseline="top";
+  const f=S.frame;
+  for(let k=0;k<=10;k+=2){
+    const i=S.view.vs+S.view.vl*k/10;
+    ctx.fillText(f?fmtSI(i*f.tpd*10/f.n,"s",3):String(k),p.l+p.w*k/10,p.t+p.h+6);
+  }
+}
+function drawTrace(ctx,arr,color,p){
+  const n=arr.length,{vs,vl}=S.view,spp=vl/p.w;
+  ctx.strokeStyle=color;ctx.lineWidth=1.6;ctx.lineJoin="round";ctx.shadowColor=color;ctx.shadowBlur=5;
+  ctx.beginPath();
+  if(spp<=1.5){
+    const i0=Math.max(0,Math.floor(vs)-1),i1=Math.min(n-1,Math.ceil(vs+vl)+1);
+    for(let i=i0;i<=i1;i++){const x=xOf(i,p),y=yOf(arr[i],p);i===i0?ctx.moveTo(x,y):ctx.lineTo(x,y)}
+    ctx.stroke();
+    if(spp<0.12){
+      ctx.fillStyle=color;
+      for(let i=i0;i<=i1;i++){ctx.beginPath();ctx.arc(xOf(i,p),yOf(arr[i],p),2,0,6.3);ctx.fill()}
+    }
+  }else{
+    let prev=null;
+    for(let px=0;px<p.w;px++){
+      const s0=Math.max(0,Math.floor(vs+px*spp)),s1=Math.min(n-1,Math.max(s0,Math.floor(vs+(px+1)*spp)));
+      if(s0>=n)break;
+      let mn=255,mx=0;for(let i=s0;i<=s1;i++){const v=arr[i];if(v<mn)mn=v;if(v>mx)mx=v}
+      const x=p.l+px+.5,y1=yOf(mx,p),y2=yOf(mn,p);
+      if(prev!=null){ctx.moveTo(x-1,prev);ctx.lineTo(x,y1)}
+      ctx.moveTo(x,y1);ctx.lineTo(x,y2);prev=y2;
+    }
+    ctx.stroke();
+  }
+  ctx.shadowBlur=0;
+}
+function marker(ctx,p,y,color,label){
+  ctx.fillStyle=color;ctx.beginPath();ctx.moveTo(p.l,y-5);ctx.lineTo(p.l+9,y);ctx.lineTo(p.l,y+5);ctx.fill();
+  ctx.font="bold 10px "+css("--mono");ctx.textAlign="left";ctx.textBaseline="middle";ctx.fillText(label,p.l+11,y);
+}
+function vline(ctx,p,x,color,label,dash){
+  ctx.strokeStyle=color;ctx.lineWidth=1;ctx.setLineDash(dash);
+  ctx.beginPath();ctx.moveTo(Math.round(x)+.5,p.t);ctx.lineTo(Math.round(x)+.5,p.t+p.h);ctx.stroke();ctx.setLineDash([]);
+  if(label){ctx.fillStyle=color;ctx.font="bold 11px "+css("--mono");ctx.textAlign="left";ctx.textBaseline="top";ctx.fillText(label,x+4,p.t+3)}
+}
+function draw(){
+  const cv=$("scope"),{ctx,w,h}=fitCanvas(cv),p=plotRect(w,h);
+  ctx.fillStyle=css("--plot");ctx.fillRect(0,0,w,h);
+  drawGrid(ctx,p);drawLabels(ctx,p,w,h);
+  const f=S.frame,ca=css("--a"),cb=css("--b"),acc=css("--accent");
+  ctx.save();ctx.beginPath();ctx.rect(p.l,p.t,p.w,p.h);ctx.clip();
+  if(f){
+    if(S.show.a)drawTrace(ctx,f.a,ca,p);
+    if(S.show.b)drawTrace(ctx,f.b,cb,p);
+    for(const [i,x] of [[1,S.cur.x1],[2,S.cur.x2]])if(S.cur.on&&x!=null)vline(ctx,p,xOf(x,p),acc,"X"+i,[5,4]);
+    if(S.hover!=null)vline(ctx,p,xOf(S.hover,p),css("--dim"),null,[2,3]);
+  }
+  ctx.restore();
+  if(S.show.a)marker(ctx,p,yOf(S.dev.AO+S.dev.OA,p),ca,"A");
+  if(S.show.b)marker(ctx,p,yOf(S.dev.AO+S.dev.OB,p),cb,"B");
+  if(S.dev.TSRC<2){ // assumption: trigger level shares the OFFSET pixel scale, so code ~ AO+level
+    const y=yOf(S.dev.AO+S.dev.TLEVEL,p);
+    ctx.strokeStyle=S.dev.TSRC===0?ca:cb;ctx.globalAlpha=.5;ctx.setLineDash([2,5]);
+    ctx.beginPath();ctx.moveTo(p.l,y);ctx.lineTo(p.l+p.w,y);ctx.stroke();ctx.setLineDash([]);ctx.globalAlpha=1;
+    ctx.fillStyle=ctx.strokeStyle;ctx.font="bold 10px "+css("--mono");ctx.textAlign="right";ctx.textBaseline="bottom";
+    ctx.fillText("T?",p.l+p.w-3,y-2);
+  }
+  ctx.strokeStyle=css("--line");ctx.strokeRect(p.l+.5,p.t+.5,p.w,p.h);
+  if(!f){ctx.fillStyle=css("--dim");ctx.font="14px system-ui";ctx.textAlign="center";ctx.textBaseline="middle";ctx.fillText("No data - Connect or Demo",p.l+p.w/2,p.t+p.h/2)}
+}
+function drawFft(){
+  $("fftwrap").hidden=!S.fft;
+  if(!S.fft)return;
+  const {ctx,w,h}=fitCanvas($("fft")),p={l:50,t:10,w:w-64,h:h-34};
+  ctx.fillStyle=css("--plot");ctx.fillRect(0,0,w,h);
+  ctx.font="11px "+css("--mono");ctx.lineWidth=1;
+  for(let k=0;k<=5;k++){
+    const y=Math.round(p.t+p.h*k/5)+.5;ctx.strokeStyle=css("--grid");
+    ctx.beginPath();ctx.moveTo(p.l,y);ctx.lineTo(p.l+p.w,y);ctx.stroke();
+    ctx.fillStyle=css("--dim");ctx.textAlign="right";ctx.textBaseline="middle";ctx.fillText(`${-20*k}`,p.l-6,y);
+  }
+  const f=S.frame;if(!f)return;
+  const fs=f.n/(f.tpd*10),peaks=[];
+  const xs=[["A",f.a,css("--a"),S.show.a],["B",f.b,css("--b"),S.show.b]];
+  for(const [name,x,color,en] of xs){
+    if(!en)continue;
+    const sp=spectrum(x,fs),m=sp.db.length;
+    ctx.strokeStyle=color;ctx.lineWidth=1.3;ctx.beginPath();
+    let pk=2;
+    for(let k=1;k<m;k++){
+      if(k>=2&&sp.db[k]>sp.db[pk])pk=k;
+      const X=p.l+p.w*k/m,Y=p.t+p.h*Math.min(1,Math.max(0,-sp.db[k]/100));
+      k===1?ctx.moveTo(X,Y):ctx.lineTo(X,Y);
+    }
+    ctx.stroke();
+    peaks.push(`${name}: ${fmtSI(pk*sp.df,"Hz")} ${sp.db[pk].toFixed(1)} dB`);
+  }
+  ctx.fillStyle=css("--dim");ctx.textAlign="center";ctx.textBaseline="top";
+  for(let k=0;k<=4;k++)ctx.fillText(fmtSI(fs/2*k/4,"Hz",3),p.l+p.w*k/4,p.t+p.h+6);
+  ctx.textAlign="right";ctx.fillText("FFT (Hann, dB re full scale, approx. freq axis)  "+peaks.join("  |  "),p.l+p.w,p.t+2);
+}
+function resize(){draw();drawFft()}
+
+// ---------- mouse: hover, cursors, zoom, pan ----------
+function bindCanvas(){
+  const cv=$("scope");let drag=null;
+  const pos=e=>{const r=cv.getBoundingClientRect();return e.clientX-r.left};
+  const P=()=>plotRect(cv.clientWidth,cv.clientHeight);
+  const nearCursor=x=>{
+    if(!S.cur.on||S.cur.x1==null)return 0;
+    const p=P();
+    for(const k of [1,2])if(Math.abs(xOf(S.cur["x"+k],p)-x)<7)return k;
+    return 0;
+  };
+  const clampView=()=>{
+    const n=S.frame?S.frame.n:S.view.vl,v=S.view;
+    v.vl=Math.max(Math.min(16,n),Math.min(n,v.vl));v.vs=Math.max(0,Math.min(n-v.vl,v.vs));
+  };
+  cv.addEventListener("pointerdown",e=>{
+    const x=pos(e),k=nearCursor(x);
+    drag=k?{k}:{pan:true,x0:x,vs0:S.view.vs};
+    cv.setPointerCapture(e.pointerId);
+  });
+  cv.addEventListener("pointermove",e=>{
+    const x=pos(e),p=P(),f=S.frame;
+    if(drag?.k){S.cur["x"+drag.k]=Math.max(0,Math.min(f.n-1,idxOf(x,p)))}
+    else if(drag?.pan){S.view.vs=drag.vs0-(x-drag.x0)/p.w*S.view.vl;clampView()}
+    S.hover=f&&x>=p.l&&x<=p.l+p.w?Math.max(0,Math.min(f.n-1,idxOf(x,p))):null;
+    cv.style.cursor=nearCursor(x)||drag?.k?"col-resize":drag?"grabbing":"crosshair";
+    schedule();
+  });
+  const end=()=>{drag=null};
+  cv.addEventListener("pointerup",end);cv.addEventListener("pointercancel",end);
+  cv.addEventListener("pointerleave",()=>{S.hover=null;schedule()});
+  cv.addEventListener("wheel",e=>{
+    e.preventDefault();
+    if(!S.frame)return;
+    const p=P(),anchor=idxOf(pos(e),p),z=e.deltaY<0?1/1.25:1.25,v=S.view;
+    const nl=Math.max(Math.min(16,S.frame.n),Math.min(S.frame.n,v.vl*z));
+    v.vs=anchor-(anchor-v.vs)*nl/v.vl;v.vl=nl;clampView();schedule();
+  },{passive:false});
+  cv.addEventListener("dblclick",()=>{if(S.frame)S.view={vs:0,vl:S.frame.n};schedule()});
+}
+
+// ---------- export ----------
+function download(name,blob){
+  const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=name;a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+}
+function exportCsv(){
+  const f=S.frame;if(!f)return log("info","nothing to export");
+  const dt=f.tpd*10/f.n,rows=["idx,t_s_approx,chA,chB"+(f.d?",dig":"")];
+  for(let i=0;i<f.n;i++)rows.push(`${i},${(i*dt).toExponential(6)},${f.a[i]},${f.b[i]}`+(f.d?`,${f.d[i]}`:""));
+  download("ds203_capture.csv",new Blob([rows.join("\n")+"\n"],{type:"text/csv"}));
+}
+function exportPng(){
+  draw();
+  $("scope").toBlob(b=>b&&download("ds203_screen.png",b),"image/png");
+}
+
+// ---------- init ----------
+function init(){
+  loadSettings();
+  buildSelects();applyDevToControls();
+  $("enA").checked=S.show.a;$("enB").checked=S.show.b;
+  bindControls();bindCanvas();updateButtons();
+  showScanBanner(false);
+  if(!hasSerial)log("err","navigator.serial missing: use Chrome/Edge on http://localhost");
+  else navigator.serial.addEventListener("disconnect",()=>{if(S.connected){log("err","device unplugged");disconnect()}});
+  new ResizeObserver(resize).observe($("scope"));
+  matchMedia("(prefers-color-scheme: light)").addEventListener("change",resize);
+  setInterval(pollDiag,5000);
+  setInterval(()=>{$("sFps").textContent=S.frames.length;const a=$("sAcq");a.textContent=S.demo?"demo":S.strategy==="plain"?"CAP?":S.strategy==="stop"?"STOP/CAP?/RUN":"-"},500);
+  updateReadout();draw();
+}
+init();
+</script>
+</body>
+</html>

@@ -1,0 +1,1214 @@
+From cedb889f3acd2a24094b4674bdb67d84bf5e3f15 Mon Sep 17 00:00:00 2001
+From: Guilherme Gazzo <guilherme@gazzo.xyz>
+Date: Wed, 18 Nov 2026 12:13:06 -0300
+Subject: [PATCH] Add USB CDC serial and capture protocol for V6.5
+
+App takes over the USB peripheral (CDC-ACM) and exposes a line-based
+command protocol: channel/timebase/trigger control, STATE?, DIAG? and
+CAP? waveform transfer. Build script for modern Arm GCC (gnu99,
+.thumb_func in cortexm3_macro.s). See WildcatV6.5/PROTOCOL.md.
+
+Known issue: CAP? while running times out in AUTO; use STOP first.
+---
+ WildcatV6.5/Draw.c           |   4 +
+ WildcatV6.5/Interrupt.c      |   7 +
+ WildcatV6.5/Main.c           |   9 +
+ WildcatV6.5/Makefile         |   2 +-
+ WildcatV6.5/PROTOCOL.md      | 102 ++++++++++
+ WildcatV6.5/UsbCdc.c         | 368 +++++++++++++++++++++++++++++++++++
+ WildcatV6.5/UsbCmd.c         | 346 ++++++++++++++++++++++++++++++++
+ WildcatV6.5/build.sh         |   5 +
+ WildcatV6.5/cortexm3_macro.s |  23 +++
+ WildcatV6.5/inc/UsbCdc.h     |  20 ++
+ WildcatV6.5/inc/UsbCmd.h     |  14 ++
+ 11 files changed, 899 insertions(+), 1 deletion(-)
+ create mode 100644 WildcatV6.5/PROTOCOL.md
+ create mode 100644 WildcatV6.5/UsbCdc.c
+ create mode 100644 WildcatV6.5/UsbCmd.c
+ create mode 100755 WildcatV6.5/build.sh
+ create mode 100644 WildcatV6.5/inc/UsbCdc.h
+ create mode 100644 WildcatV6.5/inc/UsbCmd.h
+
+diff --git a/WildcatV6.5/Draw.c b/WildcatV6.5/Draw.c
+index c570431..d889814 100644
+--- a/WildcatV6.5/Draw.c
++++ b/WildcatV6.5/Draw.c
+@@ -10,6 +10,7 @@
+ #include "BIOS.h"
+ #include "Function.h"
+ #include "File.h"
++#include "UsbCmd.h"
+ 
+ void LoadBuffer(u16 Row, u8 buffer,u8 *y,u8 *Dot_Hide,u8 service);	
+ void LoadFFTbuffer(u16 Row,u8 buffer);
+@@ -931,6 +932,9 @@ if(((_4_source==SPEC_A)||(_4_source==SPEC_B))&&(!ChartLogic())){
+ 
+   if((FrameEndFlag)&&(ResetEnableFFT==0))EnableFFT=1;
+   ResetEnableFFT=0;
++#if USB_CDC
++  if(FrameEndFlag)UsbFrameCnt++;
++#endif
+   FrameEndFlag=0;
+   RowMemPeak = RowMem;
+   
+diff --git a/WildcatV6.5/Interrupt.c b/WildcatV6.5/Interrupt.c
+index ebd09d0..34395d2 100644
+--- a/WildcatV6.5/Interrupt.c
++++ b/WildcatV6.5/Interrupt.c
+@@ -7,6 +7,7 @@
+ #include "Menu.h"
+ #include "BIOS.h"
+ #include "Process.h"
++#include "UsbCdc.h"
+ 
+ vu8  Cursor_Cnt, Key_Wait_Cnt, Key_Repeat_Cnt, Key_Buffer, Cnt_20mS, Key_Mid_Speed=0;         //                , IntCount, ModInit=0;
+ vu16 Cnt_mS;
+@@ -121,12 +122,18 @@ void ADC1_2_IRQHandler(void)
+ 
+ void USB_HP_CAN_TX_IRQHandler(void)
+ {
++#if !USB_CDC
+   __CTR_HP();
++#endif
+ }
+ 
+ void USB_LP_CAN_RX0_IRQHandler(void)
+ {
++#if USB_CDC
++  UsbCdc_Isr();
++#else
+   __USB_Istr();
++#endif
+ }
+ 
+ void CAN_RX1_IRQHandler(void)
+diff --git a/WildcatV6.5/Main.c b/WildcatV6.5/Main.c
+index a6e896d..e9afc15 100644
+--- a/WildcatV6.5/Main.c
++++ b/WildcatV6.5/Main.c
+@@ -11,6 +11,8 @@
+ #include "BIOS.h"
+ #include "Menu.h"
+ #include "File.h"
++#include "UsbCdc.h"
++#include "UsbCmd.h"
+ #include <string.h>
+ 
+ /*******************************************************************************
+@@ -207,7 +209,11 @@ int main(void)
+ 
+   NVIC_SetVectorTable(NVIC_VectTab_FLASH, (u32)&_vectors);
+   
++#if USB_CDC
++  UsbCdc_Init();
++#else
+   __USB_Init();
++#endif
+   
+   if(__Get(FPGA_OK)== 0){
+     __Display_Str(152, 30, YEL, PRN, "FPGA error");
+@@ -352,6 +358,9 @@ int main(void)
+         }  
+ 
+     Synchro();                              // simultaneous display of waveform data of each track
++#if USB_CDC
++    UsbCmd_Poll();
++#endif
+ 
+     if ((TrgAuto>0)&&(_Mode!=SCAN)&&(_Mode!=AUTO)&&(_Mode!=SGL)){  
+       if(__Get(FIFO_START)== 0){			           //check to see if not triggered w/auto trig on
+diff --git a/WildcatV6.5/Makefile b/WildcatV6.5/Makefile
+index 7dfe20a..423efaf 100644
+--- a/WildcatV6.5/Makefile
++++ b/WildcatV6.5/Makefile
+@@ -31,7 +31,7 @@ LDFLAGS = -mcpu=cortex-m3 -lc -mthumb -march=armv7 -mfix-cortex-m3-ldrd -msoft-f
+ # tried LDFLAGS = -mcpu=cortex-m3 -mthumb -march=armv7 -mfix-cortex-m3-ldrd -msoft-float
+ 
+ 
+-OBJS = Calibrat.o Draw.o Files.o Function.o Interrupt.o Main.o Menu.o Process.o BIOS.o startup.o stm32f10x_nvic.o
++OBJS = Calibrat.o Draw.o Files.o Function.o Interrupt.o Main.o Menu.o Process.o BIOS.o startup.o stm32f10x_nvic.o UsbCdc.o UsbCmd.o
+ OBJS +=cortexm3_macro.o
+ #TARGETS = app1.hex app2.hex app3.hex
+ #TARGETS = app1.hex app2.hex
+diff --git a/WildcatV6.5/PROTOCOL.md b/WildcatV6.5/PROTOCOL.md
+new file mode 100644
+index 0000000..a6eeedd
+--- /dev/null
++++ b/WildcatV6.5/PROTOCOL.md
+@@ -0,0 +1,102 @@
++# Wildcat-CDC serial protocol
++
++USB CDC-ACM (115200 8N1 values are ignored). ASCII lines terminated by `\n` (`\r` ignored), case-insensitive,
++tokens separated by spaces, max 63 chars per line. Replies end with `\n`. Setters reply `OK`; errors reply `ERR <reason>`.
++Unknown command: `ERR unknown`. Wrong token count: `ERR args`. Line too long: `ERR overflow`.
++
++Source: `UsbCmd.c` (parsed from the main loop right after `Synchro()`), `UsbCdc.c` (transport).
++
++## Commands
++
++| Command | Reply | Maps to | Valid range |
++|---|---|---|---|
++| `*IDN?` | `DS203,Wildcat-CDC,6.5-cdc1` | | |
++| `CH <A\|B> RANGE <n>` | `OK` | `Title[TRACK1/2][RANGE]` -> `Update_Range()` | 0..`Limit` (BIOS `Yp_Max`, see `TABLES?`) else `ERR range` |
++| `CH <A\|B> OFFSET <n>` | `OK` | `Title[TRACK1/2][POSI]` -> `SetOffset()` via `Update_Range()` | 0..200 (screen pixels, 25 px/div, default A=150 B=100) |
++| `CH <A\|B> COUPLE <AC\|DC>` | `OK` | `Title[TRACK1/2][COUPLE]` 1=AC, 0=DC | |
++| `TB <n>` | `OK` | `_T_base` (`Title[T_BASE][BASE]`) -> `Update_Base()` | 0..`Limit` (21); `ERR mode` in SCAN / X_Y |
++| `MODE <n>` | `OK` | `_Mode` (extra, not in the original spec) | 1..5 (see table); `ERR mode` if currently SCAN/X_Y or value 0/6 |
++| `TRIG SRC <A\|B\|C\|D>` | `OK` | `Title[TRIGG][SOURCE]` 0..3 -> `Update_Trig()` | `ERR channel off` if that track is hidden; `ERR ab mode` if the scope is in A&B trigger mode |
++| `TRIG KIND <n>` | `OK` | `_Tr_kind` | 0..8 |
++| `TRIG LEVEL <n>` | `OK` | `V_Trigg[_Tr_source].Value` | 0..200 (screen pixels, same scale as OFFSET); `ERR source` if source is C/D |
++| `RUN` | `OK` | `_Status = RUN`, clears FIFO/buffer like the KEY1 handler | no-op if already running |
++| `STOP` | `OK` | `_Status = HOLD` | |
++| `STATE?` | one line, see below | | |
++| `TABLES?` | `TABLES V=<range names> T=<timebase names>` | `Y_Attr[i].STR`, `X_Attr[i].STR` from the BIOS | |
++| `DIAG?` | `DIAG ISR=.. RST=.. SUSP=.. WKUP=.. ERR=.. FIX=.. ISTR=.. CNTR=.. ADDR=.. CFG=..` | `UsbCdc_Diag()`: USB ISR entries, bus resets, suspend/wakeup/error flags seen, CNTR self-repairs, last ISTR, CNTR, DADDR (all decimal, u16 counters wrap), CFG=1 when configured | |
++| `CAP?` | `#CAP <n> 2\n` + 2n raw bytes + `\nOK\n` | `DataBuf` | |
++| `CAPD?` | `#CAP <n> 3\n` + 3n raw bytes + `\nOK\n` | `DataBuf` | |
++
++Every setter sets the Title `Flag |= UPDAT` and `Update = 1` with `SelectiveUpdate` masking out the `Update_*` calls that
++change does not need (same masks the key handler uses), so the LCD menu follows. The signal generator is never touched.
++
++### STATE?
++
++`STATE RA=5 RB=1 OA=150 OB=100 CA=0 CB=1 SA=1 SB=1 TB=17 MODE=1 TSRC=1 TKIND=0 TLEVEL=100 RUN=1 N=4096 AO=54`
++
++RA/RB range idx, OA/OB offset, CA/CB couple (0 DC, 1 AC, other values = detector/serial modes set from the menu),
++SA/SB channel source (0 = channel off), TB timebase idx, MODE, TSRC/TKIND/TLEVEL trigger, RUN=1 running / 0 hold,
++N = samples a CAP? would return now (`get_bag_max_buf()`), AO = `ADCoffset`.
++
++### CAP? / CAPD? frame
++
++`#CAP <n> <bps>\n`, then `n` samples, then `\nOK\n`. Per sample: byte0 = ChA (bits 0-7 of the `DataBuf` word),
++byte1 = ChB (bits 8-15); with `CAPD?` byte2 = bits 16-17 (bit0 = C, bit1 = D). Raw ADC codes, not volts.
++Ground of channel X is at code `AO + OFFSET(X)` (calibration terms Ka1/Ka2 not applied); volts ~ `(code - AO - OFFSET) / 25 * volts_per_div`.
++The trigger point is at sample index ~150 (149 for time-based trigger kinds).
++In oversampling buffer modes (`_T_base < 17` with OS enabled) bits 16-31 of the word hold OS min/max, so `CAPD?` is meaningless there.
++
++Readiness: if the scope is in HOLD the current buffer is sent immediately. If running, the reply waits for the next
++completed frame (`FrameEndFlag` consumed by `Draw_Window`, counted in `UsbFrameCnt`) for up to 500 ms, else `ERR timeout`
++(typical with NORM/SGL modes and no trigger). Use AUTO mode (`MODE 1`) for free-running capture.
++Writes retry until the host drains the TX ring; if nothing drains for 1 s the rest of the reply is dropped.
++
++## Index tables
++
++### Timebase `TB` (`TimeBase[]` in Process.c, `FPGA_TbaseOS[]` comments, `_100uS = 12` in Calibrat.h)
++
++| idx | time/div | idx | time/div | idx | time/div | idx | time/div |
++|---|---|---|---|---|---|---|---|
++| 0 | 1 s | 6 | 10 ms | 12 | 100 us | 18 | 1 us |
++| 1 | 500 ms | 7 | 5 ms | 13 | 50 us | 19 | 0.5 us |
++| 2 | 200 ms | 8 | 2 ms | 14 | 20 us | 20 | 0.2 us |
++| 3 | 100 ms | 9 | 1 ms | 15 | 10 us | 21 | 0.1 us |
++| 4 | 50 ms | 10 | 500 us | 16 | 5 us | | |
++| 5 | 20 ms | 11 | 200 us | 17 | 2 us (menu default) | | |
++
++Sample rate is not tabulated in the app: it comes from the BIOS `X_Attr[idx].PSC/ARR/KP`
++(period = (PSC+1)(ARR+1)/72 MHz, see Draw.c `SamplingPeriod`). Nominal density is 25 samples/div; the fastest ranges
++(roughly idx 17-21) are interpolated (`KP` < 1024). Exact MS/s per index is NOT confirmed from source; measure with a known
++signal or read the strings with `TABLES?`.
++
++### Vertical `RANGE`
++
++The strings live in the BIOS (`Y_Attr[i].STR`, loaded into `Vertical[]` by `Load_Attr`), not in the app sources, so volts/div per
++index is NOT confirmed here. Use `TABLES?` (`V=` list, index = position). The app defaults are A=5, B=1.
++
++### Other enums
++
++- `MODE`: 0 SCAN (roll), 1 AUTO, 2 NORM (`NORH`), 3 NORM-CL (`NORC`), 4 PERSIST (`NORHLD`), 5 SINGLE (`SGL`), 6 X_Y. Only 1..5 are accepted.
++- `TRIG KIND` (`TR_TYPE`): 0 falling edge, 1 rising edge, 2 `<Vt`, 3 `>Vt`, 4 `L<[`, 5 `L>[`, 6 `H<[`, 7 `H>[` (pulse width vs T1-T2 cursors), 8 GEN (only meaningful with the generator in sweep/burst).
++- `TRIG SRC`: A=0, B=1, C=2, D=3 (4 = A&B alternate, not settable here).
++- `COUPLE` on screen also has DT/TL/RS/i2/SP for detector and serial decode; only AC/DC are settable.
++
++## Not confidently mapped / caveats
++
++- Volts/div and MS/s per index (above): need `TABLES?` or hardware measurement.
++- `MODE` is an addition beyond the requested list; it only flips `_Mode` + full update, without the menu's per-mode side effects (NORHLD buffer clears, A&B juggling).
++- Slow timebases (`TB` 0..10) fill `DataBuf` incrementally (`JumpCnt`); in HOLD the buffer may be partly refreshed. For a coherent frame at those speeds, prefer a fast timebase or let `CAP?` wait for a frame while running.
++- `RUN` re-implements the common branch of the KEY1 handler (not the Options/FrameMode special cases).
++- `TRIG SRC C|D` is accepted when the track is on but not exercised by the menu code path the same way (digital trigger memory `PreviousTrigSelect` is not updated).
++- CH range/offset changes do not move the trigger level; re-set `TRIG LEVEL` afterwards.
++
++## Test plan
++
++1. Flash `app1-cdc.hex`, connect, `python3 ds203.py <port> idn` -> `DS203,Wildcat-CDC,6.5-cdc1`.
++2. `state`, compare each field with the LCD menu; `set TABLES?` lists range/timebase names.
++3. Feed a known square wave (CAL pin, 1 kHz). `set MODE 1`, `set TB 9`, `set CH A RANGE n` and verify LCD title fields change in step and the waveform fits.
++4. `set TRIG SRC A`, `set TRIG KIND 1`, `set TRIG LEVEL 150`, check LCD trigger marker moves and NORM mode (`MODE 2`) triggers.
++5. `cap a.csv` while running, then `stop`, `cap b.csv`, `cap --digital`; check n matches `STATE? N`, header/trailer parse, CSV plots as the expected wave, rising edge near idx 150.
++6. Negative tests: `CH C RANGE 1`, `CH A RANGE 99`, `TB 22`, `FOO`, 70-char line, `CAP?` with no trigger in NORM (expect `ERR timeout`).
++7. Close the host port mid-`CAP?` and confirm the scope keeps running (1 s watchdog), then reopen and re-run.
++8. Press buttons on the scope during a session; menu and serial changes must not desync.
+diff --git a/WildcatV6.5/UsbCdc.c b/WildcatV6.5/UsbCdc.c
+new file mode 100644
+index 0000000..835d998
+--- /dev/null
++++ b/WildcatV6.5/UsbCdc.c
+@@ -0,0 +1,368 @@
++#include "UsbCdc.h"
++
++#if USB_CDC
++
++#include "BIOS.h"
++
++#define USB_REG(o)   (*(vu16 *)(0x40005C00 + (o)))
++#define EPR(n)       USB_REG(4 * (n))
++#define CNTR         USB_REG(0x40)
++#define ISTR         USB_REG(0x44)
++#define DADDR        USB_REG(0x4C)
++#define BTABLE       USB_REG(0x50)
++
++// PMA halfwords sit on 4-byte strides: local byte offset N is at 0x40006000 + 2N
++#define PMA(off)     (*(vu16 *)(0x40006000 + 2 * (off)))
++#define BT_ATX(n)    PMA(8 * (n))
++#define BT_CTX(n)    PMA(8 * (n) + 2)
++#define BT_ARX(n)    PMA(8 * (n) + 4)
++#define BT_CRX(n)    PMA(8 * (n) + 6)
++
++#define EP0_TX  0x20
++#define EP0_RX  0x60
++#define EP1_TX  0xA0
++#define EP2_TX  0xA8
++#define EP3_RX  0xE8
++
++#define EP_BULK   0x0000
++#define EP_CTRL   0x0200
++#define EP_INTR   0x0600
++#define ST_DIS    0
++#define ST_STALL  1
++#define ST_NAK    2
++#define ST_VALID  3
++
++#define ISTR_CTR    0x8000
++#define ISTR_RESET  0x0400
++#define CNTR_CTRM   0x8000
++#define CNTR_RESETM 0x0400
++#define CNTR_SUSPM  0x0800
++#define CNTR_FSUSP  0x0008
++#define ISTR_SUSP   0x0800
++#define ISTR_WKUP   0x1000
++#define ISTR_ERR    0x2000
++#define ISTR_PMAOVR 0x4000
++#define ISTR_SOF    0x0200
++#define ISTR_ESOF   0x0100
++#define NVIC_IP(n)  (*(vu8 *)(0xE000E400 + (n)))
++
++#define RCC_APB1RSTR (*(vu32 *)0x40021010)
++#define RCC_APB1ENR  (*(vu32 *)0x4002101C)
++#define RCC_APB2ENR  (*(vu32 *)0x40021018)
++#define GPIOA_CRH    (*(vu32 *)0x40010804)
++#define GPIOA_BRR    (*(vu32 *)0x40010814)
++#define NVIC_ISER0   (*(vu32 *)0xE000E100)
++#define NVIC_ICER0   (*(vu32 *)0xE000E180)
++#define NVIC_ICPR0   (*(vu32 *)0xE000E280)
++#define USB_LP_BIT   (1UL << 20)
++#define USB_HP_BIT   (1UL << 19)
++
++typedef struct { u8 b[256]; vu16 h, t; } Ring;
++
++static Ring rx, tx;
++static const u8 *c0p;
++static u16 c0left;
++static u8 c0zlp, c0setlc, c0addr, c0addr_pend;
++static u8 configured, tx_busy, rx_armed;
++static u8 lc[7] = {0x00, 0xC2, 0x01, 0x00, 0, 0, 8};   // 115200 8N1, host-set values only stored
++static u8 sbuf[40];
++static UsbDiag_t diag;
++
++// priority byte 0 is highest in every PriorityGroup, so SetIRQ2Priority's regroup cannot demote USB
++static void usb_prio(void) { NVIC_IP(20) = 0; }
++
++// VID/PID 0483:5740 is ST's VCP pair: placeholder for the prototype only
++static const u8 DevDesc[18] = {
++  18, 1, 0x00, 0x02, 0x02, 0x00, 0x00, 64, 0x83, 0x04, 0x40, 0x57, 0x00, 0x02, 1, 2, 3, 1};
++static const u8 CfgDesc[67] = {
++  9, 2, 67, 0, 2, 1, 0, 0xC0, 50,
++  9, 4, 0, 0, 1, 0x02, 0x02, 0x01, 0,
++  5, 0x24, 0x00, 0x10, 0x01,
++  5, 0x24, 0x01, 0x00, 0x01,
++  4, 0x24, 0x02, 0x02,
++  5, 0x24, 0x06, 0x00, 0x01,
++  7, 5, 0x81, 0x03, 8, 0, 255,
++  9, 4, 1, 0, 2, 0x0A, 0x00, 0x00, 0,
++  7, 5, 0x03, 0x02, 64, 0, 0,
++  7, 5, 0x82, 0x02, 64, 0, 0};
++static const u8 LangDesc[4] = {4, 3, 0x09, 0x04};
++static const char *const Str[3] = {"Wildcat", "DS203 CDC", "0001"};
++static const u8 Zero2[2] = {0, 0};
++static const u8 One = 1;
++
++static u16 ring_cnt(Ring *r)  { return r->h - r->t; }
++static u16 ring_free(Ring *r) { return 256 - (r->h - r->t); }
++static void ring_put(Ring *r, u8 c) { r->b[r->h & 255] = c; r->h++; }
++static u8  ring_get(Ring *r)  { u8 c = r->b[r->t & 255]; r->t++; return c; }
++
++// EPnR: CTR and DTOG/STAT bits are write-1-to-clear / write-1-to-toggle, so rebuild every write
++static void set_rx(u8 n, u16 s) { u16 v = EPR(n); EPR(n) = (v & 0x070F) | 0x8080 | ((v ^ (s << 12)) & 0x3000); }
++static void set_tx(u8 n, u16 s) { u16 v = EPR(n); EPR(n) = (v & 0x070F) | 0x8080 | ((v ^ (s << 4)) & 0x0030); }
++static void clr_ctr_rx(u8 n) { EPR(n) = (EPR(n) & 0x070F) | 0x0080; }
++static void clr_ctr_tx(u8 n) { EPR(n) = (EPR(n) & 0x070F) | 0x8000; }
++
++static void ep_open(u8 n, u16 type, u16 txs, u16 rxs)
++{
++  u16 v;
++  EPR(n) = type | n;
++  v = EPR(n);
++  EPR(n) = (v & 0x070F) | 0x8080 | (v & 0x4040);   // clear both data toggles
++  set_tx(n, txs);
++  set_rx(n, rxs);
++}
++
++static void to_pma(u16 off, const u8 *p, u16 n)
++{
++  u16 i;
++  for (i = 0; i < n; i += 2)
++    PMA(off + i) = p[i] | ((i + 1 < n) ? (u16)p[i + 1] << 8 : 0);
++}
++
++static void pump(void)
++{
++  u16 n, i, w;
++#if USB_CDC_ECHO
++  while (ring_cnt(&rx) && ring_free(&tx)) ring_put(&tx, ring_get(&rx));
++const UsbDiag_t *UsbCdc_Diag(void)
++{
++  diag.cntr = CNTR;
++  diag.daddr = DADDR;
++  return &diag;
++}
++
++#endif
++  if (!configured) return;
++  if (!tx_busy && (n = ring_cnt(&tx)) != 0) {
++    if (n > 64) n = 64;
++    for (i = 0; i < n; i += 2) {
++      w = ring_get(&tx);
++      if (i + 1 < n) w |= (u16)ring_get(&tx) << 8;
++      PMA(EP2_TX + i) = w;
++    }
++    BT_CTX(2) = n;
++    set_tx(2, ST_VALID);
++    tx_busy = 1;
++  }
++  if (!rx_armed && ring_free(&rx) >= 64) {
++    set_rx(3, ST_VALID);
++    rx_armed = 1;
++  }
++}
++
++static void ep0_next(void)
++{
++  u16 n = c0left > 64 ? 64 : c0left;
++  if (!n && !c0zlp) return;
++  if (!n) c0zlp = 0;
++  to_pma(EP0_TX, c0p, n);
++  BT_CTX(0) = n;
++  c0p += n;
++  c0left -= n;
++  set_tx(0, ST_VALID);
++}
++
++static void ep0_send(const u8 *p, u16 len, u16 wlen)
++{
++  c0p = p;
++  c0left = len > wlen ? wlen : len;
++  c0zlp = (c0left == 0) || (c0left < wlen && (c0left % 64) == 0);
++  ep0_next();
++}
++
++static void configure(u8 cfg)
++{
++  configured = diag.cfg = cfg != 0;
++  tx_busy = rx_armed = 0;
++  if (configured) {
++    ep_open(1, EP_INTR, ST_NAK, ST_DIS);
++    ep_open(2, EP_BULK, ST_NAK, ST_DIS);
++    ep_open(3, EP_BULK, ST_DIS, ST_NAK);
++  } else {
++    ep_open(1, EP_INTR, ST_DIS, ST_DIS);
++    ep_open(2, EP_BULK, ST_DIS, ST_DIS);
++    ep_open(3, EP_BULK, ST_DIS, ST_DIS);
++  }
++}
++
++static void ep0_setup(void)
++{
++  u16 rt = PMA(EP0_RX), val = PMA(EP0_RX + 2), len = PMA(EP0_RX + 6);
++  u8 type = rt & 0xFF, req = rt >> 8;
++  u8 idx = val & 0xFF;
++  u8 i;
++
++  c0setlc = 0;
++  set_rx(0, ST_VALID);
++  switch ((type << 8) | req) {
++  case 0x8006:
++    switch (val >> 8) {
++    case 1: ep0_send(DevDesc, sizeof DevDesc, len); return;
++    case 2: ep0_send(CfgDesc, sizeof CfgDesc, len); return;
++    case 3:
++      if (idx == 0) { ep0_send(LangDesc, 4, len); return; }
++      if (idx <= 3) {
++        const char *s = Str[idx - 1];
++        for (i = 0; s[i]; i++) { sbuf[2 + 2 * i] = s[i]; sbuf[3 + 2 * i] = 0; }
++        sbuf[0] = 2 + 2 * i;
++        sbuf[1] = 3;
++        ep0_send(sbuf, sbuf[0], len);
++        return;
++      }
++    }
++    break;
++  case 0x0005: c0addr = val & 0x7F; c0addr_pend = 1; ep0_send(0, 0, 0); return;
++  case 0x0009: configure(val & 0xFF); ep0_send(0, 0, 0); return;
++  case 0x8008: ep0_send(&One, 1, len); return;
++  case 0x8000: case 0x8100: case 0x8200: ep0_send(Zero2, 2, len); return;
++  case 0x0001: case 0x0101: case 0x0201:
++  case 0x0003: case 0x0103: case 0x0203:
++  case 0x010B: case 0x2122:
++    ep0_send(0, 0, 0); return;
++  case 0x810A: ep0_send(Zero2, 1, len); return;
++  case 0xA121: ep0_send(lc, 7, len); return;
++  case 0x2120: c0setlc = 1; return;
++  }
++  set_tx(0, ST_STALL);
++  set_rx(0, ST_STALL);
++}
++
++static void bus_reset(void)
++{
++  BTABLE = 0;
++  BT_ATX(0) = EP0_TX; BT_CTX(0) = 0; BT_ARX(0) = EP0_RX; BT_CRX(0) = 0x8400;
++  BT_ATX(1) = EP1_TX; BT_CTX(1) = 0;
++  BT_ATX(2) = EP2_TX; BT_CTX(2) = 0;
++  BT_ARX(3) = EP3_RX; BT_CRX(3) = 0x8400;
++  configure(0);
++  c0addr_pend = c0setlc = 0;
++  c0left = c0zlp = 0;
++  rx.h = rx.t = tx.h = tx.t = 0;
++  ep_open(0, EP_CTRL, ST_NAK, ST_VALID);
++  DADDR = 0x80;
++}
++
++void UsbCdc_Isr(void)
++{
++  u16 s, v;
++  u8 n, guard;
++
++  diag.isr++;
++  for (guard = 0; guard < 16; guard++) {
++    s = ISTR;
++    diag.istr = s;
++    if (s & ISTR_RESET) { ISTR = (u16)~ISTR_RESET; diag.rst++; bus_reset(); continue; }
++    if (s & ISTR_SUSP) {
++      ISTR = (u16)~ISTR_SUSP;
++      diag.susp++;
++      CNTR &= ~CNTR_SUSPM;                              // re-armed from UsbCdc_Read: bounds the rate
++    }
++    if (s & ISTR_WKUP) { ISTR = (u16)~ISTR_WKUP; diag.wkup++; CNTR &= ~CNTR_FSUSP; }
++    if (s & (ISTR_ERR | ISTR_PMAOVR)) { ISTR = (u16)~(ISTR_ERR | ISTR_PMAOVR); diag.err++; }
++    if (s & (ISTR_SOF | ISTR_ESOF)) ISTR = (u16)~(ISTR_SOF | ISTR_ESOF);
++    if (!(s & ISTR_CTR)) break;
++    n = s & 0x0F;
++    v = EPR(n);
++    if (v & 0x8000) {
++      clr_ctr_rx(n);
++      if (n == 0) {
++        if (v & 0x0800) ep0_setup();
++        else {
++          if (c0setlc) {
++            u8 i;
++            for (i = 0; i < 7; i += 2) {
++              u16 w = PMA(EP0_RX + i);
++              lc[i] = w; if (i < 6) lc[i + 1] = w >> 8;
++            }
++            c0setlc = 0;
++            ep0_send(0, 0, 0);
++          }
++          set_rx(0, ST_VALID);
++        }
++      } else if (n == 3) {
++        u16 cnt = BT_CRX(3) & 0x3FF, i, w;
++        for (i = 0; i < cnt; i += 2) {
++          w = PMA(EP3_RX + i);
++          ring_put(&rx, w);
++          if (i + 1 < cnt) ring_put(&rx, w >> 8);
++        }
++        rx_armed = 0;
++      }
++    }
++    if (v & 0x0080) {
++      clr_ctr_tx(n);
++      if (n == 0) {
++        if (c0addr_pend) { DADDR = 0x80 | c0addr; c0addr_pend = 0; }
++        ep0_next();
++      } else if (n == 2) tx_busy = 0;
++    }
++  }
++  pump();
++}
++
++int UsbCdc_Read(u8 *buf, int len)
++{
++  int i = 0;
++  NVIC_ICER0 = USB_LP_BIT;
++  usb_prio();
++  if ((CNTR & (CNTR_CTRM | CNTR_RESETM | 3)) != (CNTR_CTRM | CNTR_RESETM)) {
++    CNTR = CNTR_CTRM | CNTR_RESETM;
++    diag.fix++;
++  }
++  CNTR |= CNTR_SUSPM;
++  if (!configured) { NVIC_ISER0 = USB_LP_BIT; return 0; }
++  while (i < len && ring_cnt(&rx)) buf[i++] = ring_get(&rx);
++  pump();
++  NVIC_ISER0 = USB_LP_BIT;
++  return i;
++}
++
++int UsbCdc_Write(const u8 *buf, int len)
++{
++  int i = 0;
++  if (!configured) return 0;
++  NVIC_ICER0 = USB_LP_BIT;
++  while (i < len && ring_free(&tx)) ring_put(&tx, buf[i++]);
++  pump();
++  NVIC_ISER0 = USB_LP_BIT;
++  return i;
++}
++
++void UsbCdc_Init(void)
++{
++  vu32 d;
++
++  __USB_Init();
++
++  NVIC_ICER0 = USB_LP_BIT | USB_HP_BIT;
++  RCC_APB2ENR |= 0x4;                                  // GPIOA
++  RCC_APB1ENR |= 0x00800000;                           // USB
++  RCC_APB1RSTR |= 0x00800000;
++  RCC_APB1RSTR &= ~0x00800000UL;
++  RCC_APB1ENR &= ~0x00800000UL;
++
++  // Pull PA11/PA12 low for ~25 ms so the host sees a disconnect and re-enumerates us
++  GPIOA_CRH = (GPIOA_CRH & 0xFFF00FFF) | 0x00022000;
++  GPIOA_BRR = 0x1800;
++  for (d = 0; d < 400000; d++) { }
++  GPIOA_CRH = (GPIOA_CRH & 0xFFF00FFF) | 0x00044000;
++
++  RCC_APB1ENR |= 0x00800000;
++  CNTR = 0x01;                                         // FRES, powered up
++  for (d = 0; d < 1000; d++) { }
++  CNTR = 0;
++  ISTR = 0;
++  BTABLE = 0;
++  CNTR = CNTR_CTRM | CNTR_RESETM | CNTR_SUSPM;
++  usb_prio();
++  NVIC_ICPR0 = USB_LP_BIT | USB_HP_BIT;
++  NVIC_ISER0 = USB_LP_BIT;
++}
++
++const UsbDiag_t *UsbCdc_Diag(void)
++{
++  diag.cntr = CNTR;
++  diag.daddr = DADDR;
++  return &diag;
++}
++
++#endif
+diff --git a/WildcatV6.5/UsbCmd.c b/WildcatV6.5/UsbCmd.c
+new file mode 100644
+index 0000000..23b3a95
+--- /dev/null
++++ b/WildcatV6.5/UsbCmd.c
+@@ -0,0 +1,346 @@
++#include "Interrupt.h"
++#include "Process.h"
++#include "Draw.h"
++#include "BIOS.h"
++#include "Menu.h"
++#include "UsbCmd.h"
++#include <string.h>
++
++#if USB_CDC
++
++#define CDC_VERSION   "6.5-cdc1"
++#define CAP_WAIT_T20  25          // 500 ms in 20 ms ticks
++#define TX_STALL_T20  50          // 1 s without the host draining anything
++
++vu8 UsbFrameCnt;
++
++extern u8  SelectiveUpdate;
++extern u16 XposRef;
++u16  GetXposRef(u16 XPos);
++u16  get_bag_max_buf(void);
++u8   OSBufferLogic(void);
++u8   ChartLogic(void);
++void ClearMeters(void);
++void ClearTrackBuff(u8 service);
++void ResetSum(void);
++void cleardatabuf(u8 service);
++void InitChart(void);
++void TriggFlagUpdate(void);
++
++static char line[64];
++static u8   ln, overflow;
++static u8   txb[64], txn, txfail;
++static u8   pend, cap_bps, cap_f0;
++static u32  cap_t0;
++
++// 20 ms ticks; Cnt_20mS wraps 50->0 as Sec_Cnt increments
++static u32 now20(void) { return (u32)Sec_Cnt * 51 + Cnt_20mS; }
++
++static void flush(void)
++{
++  u8 *p = txb;
++  int n = txn, k;
++  u32 t0 = now20();
++
++  txn = 0;
++  while (n > 0 && !txfail) {
++    k = UsbCdc_Write(p, n);
++    if (k > 0) { p += k; n -= k; t0 = now20(); }
++    else if (now20() - t0 > TX_STALL_T20) txfail = 1;
++  }
++}
++
++static void emit(u8 c)
++{
++  txb[txn++] = c;
++  if (txn == sizeof txb) flush();
++}
++
++static void ps(const char *s) { while (*s) emit(*s++); }
++
++static void pn(s32 v)
++{
++  char d[11];
++  u8 i = 0;
++  u32 u = v < 0 ? -(u32)v : (u32)v;
++
++  if (v < 0) emit('-');
++  do { d[i++] = '0' + u % 10; u /= 10; } while (u);
++  while (i) emit(d[--i]);
++}
++
++static void err(const char *why) { ps("ERR "); ps(why); emit('\n'); }
++static void ok(void)             { ps("OK\n"); }
++
++static u8 num(const char *s, s32 *out)
++{
++  s32 v = 0;
++  u8 neg = 0, digits = 0;
++
++  if (*s == '-') { neg = 1; s++; }
++  for (; *s >= '0' && *s <= '9'; s++) {
++    v = v * 10 + (*s - '0');
++    if (++digits > 6) return 0;
++  }
++  if (*s || !digits) return 0;
++  *out = neg ? -v : v;
++  return 1;
++}
++
++// excl = SelectiveUpdate bits for the Update_* calls this change does not need (0x02 range, 0x04 base, 0x10 trig)
++static void request_update(u8 excl)
++{
++  SelectiveUpdate |= excl | 0x08;     // 0x08: leave the signal generator alone
++  if (!Update) Update = 1;
++}
++
++static void send_cap(void)
++{
++  u16 n = get_bag_max_buf(), i;
++  u32 w;
++
++  ps("#CAP "); pn(n); emit(' '); pn(cap_bps); emit('\n');
++  for (i = 0; i < n; i++) {
++    w = DataBuf[i];
++    emit(w & 0xFF);
++    emit((w >> 8) & 0xFF);
++    if (cap_bps == 3) emit((w >> 16) & 3);
++  }
++  ps("\nOK\n");
++}
++
++static void cmd_ch(char **t)
++{
++  s32 v = 0;
++  u8 ch;
++  menu *m;
++
++  if (!strcmp(t[1], "A")) ch = TRACK1;
++  else if (!strcmp(t[1], "B")) ch = TRACK2;
++  else { err("channel"); return; }
++  m = Title[ch];
++
++  if (!strcmp(t[2], "RANGE")) {
++    if (!num(t[3], &v) || v < 0 || v > m[RANGE].Limit) { err("range"); return; }
++    m[RANGE].Value = v;
++    m[RANGE].Flag |= UPDAT;
++    SelectiveUpdate |= 0x20 << ch;
++  } else if (!strcmp(t[2], "OFFSET")) {
++    if (!num(t[3], &v) || v < 0 || v > m[POSI].Limit) { err("range"); return; }
++    m[POSI].Value = v;
++    m[POSI].Flag |= UPDAT;
++  } else if (!strcmp(t[2], "COUPLE")) {
++    if (!strcmp(t[3], "AC")) v = 1;
++    else if (strcmp(t[3], "DC")) { err("value"); return; }
++    m[COUPLE].Value = v;
++    m[COUPLE].Flag |= UPDAT;
++  } else { err("unknown"); return; }
++  request_update(0x04);
++  ok();
++}
++
++static void cmd_tb(char **t)
++{
++  s32 v;
++
++  if (!num(t[1], &v)) { err("value"); return; }
++  if (_Mode == SCAN || _Mode == X_Y) { err("mode"); return; }
++  if (v < 0 || v > Title[T_BASE][BASE].Limit) { err("range"); return; }
++
++  _T_base = v;
++  Title[T_BASE][BASE].Flag |= UPDAT;
++  if (FrameMode < 2) {
++    u16 x = GetXposRef(_X_posi.Value);
++    if (x > 150) XposRef = x;
++  }
++  // same as the menu: let Update_Base see a fresh untriggered state
++  if (!OSBufferLogic() && (__Get(FIFO_START) != 0 || (_Mode != NORH && _Mode != NORHLD)))
++    __Set(TRIGG_MODE, UNCONDITION);
++  if (_Mode == NORH || _Mode == NORHLD) { EnablePaS = 1; ResetSum(); }
++  request_update(0x02 | 0x10);
++  ok();
++}
++
++static void cmd_mode(char **t)
++{
++  s32 v;
++
++  if (!num(t[1], &v)) { err("value"); return; }
++  if (_Mode == SCAN || _Mode == X_Y || v < AUTO || v > SGL) { err("mode"); return; }
++  _Mode = v;
++  Title[T_BASE][MODE].Flag |= UPDAT;
++  request_update(0);
++  ok();
++}
++
++static void cmd_trig(char **t)
++{
++  s32 v;
++
++  if (Title[TRIGG][SOURCE].Value == 4) { err("ab mode"); return; }
++
++  if (!strcmp(t[1], "SRC")) {
++    if (t[2][0] < 'A' || t[2][0] > 'D' || t[2][1]) { err("value"); return; }
++    v = t[2][0] - 'A';
++    if (Title[v][SOURCE].Value == HIDE) { err("channel off"); return; }
++    Title[TRIGG][SOURCE].Value = v;
++  } else if (!strcmp(t[1], "KIND")) {
++    if (!num(t[2], &v) || v < 0 || v > Title[TRIGG][TR_KIND].Limit) { err("range"); return; }
++    _Tr_kind = v;
++  } else if (!strcmp(t[1], "LEVEL")) {
++    if (!num(t[2], &v) || v < 0 || v > Title[TRIGG][THRESHOLD].Limit) { err("range"); return; }
++    if (_Tr_source > 1) { err("source"); return; }
++    V_Trigg[_Tr_source].Value = v;
++  } else { err("unknown"); return; }
++  TriggFlagUpdate();
++  request_update(0x02 | 0x04);
++  ok();
++}
++
++static void cmd_run(void)
++{
++  if (_Status == RUN) { ok(); return; }
++  _State.Flag |= UPDAT;
++  _Status = RUN;
++  if (ChartLogic()) InitChart();
++  else {
++    SelectiveUpdate |= 0x60;
++    if (_Mode != NORH) ClearTrackBuff(1); else ClearLeadingEdge = 1;
++    __Set(FIFO_CLR, W_PTR);
++    cleardatabuf(2);
++    if (_T_base < 11) JumpCnt = 0;
++    EnablePaS = 1;
++    ResetSum();
++  }
++  ok();
++}
++
++static void cmd_state(void)
++{
++  ps("STATE RA="); pn(_A_Range);
++  ps(" RB=");      pn(_B_Range);
++  ps(" OA=");      pn(_1_posi);
++  ps(" OB=");      pn(_2_posi);
++  ps(" CA=");      pn(Title[TRACK1][COUPLE].Value);
++  ps(" CB=");      pn(Title[TRACK2][COUPLE].Value);
++  ps(" SA=");      pn(_1_source);
++  ps(" SB=");      pn(_2_source);
++  ps(" TB=");      pn(_T_base);
++  ps(" MODE=");    pn(_Mode);
++  ps(" TSRC=");    pn(_Tr_source);
++  ps(" TKIND=");   pn(_Tr_kind);
++  ps(" TLEVEL=");  pn(_Tr_source < 4 ? V_Trigg[_Tr_source].Value : 0);
++  ps(_Status == RUN ? " RUN=1" : " RUN=0");
++  ps(" N=");       pn(get_bag_max_buf());
++  ps(" AO=");      pn(ADCoffset);
++  emit('\n');
++}
++
++static void put_attr(const char *str)
++{
++  u8 i = 0, n = 0;
++
++  while (n < 8 && str[n]) n++;
++  while (n && str[n - 1] == ' ') n--;
++  while (i < n && str[i] == ' ') i++;
++  for (; i < n; i++) emit(str[i]);
++}
++
++static void cmd_tables(void)
++{
++  u16 i;
++
++  ps("TABLES V=");
++  for (i = 0; i <= G_Attr[0].Yp_Max; i++) { if (i) emit(','); put_attr(Y_Attr[i].STR); }
++  ps(" T=");
++  for (i = 0; i <= G_Attr[0].Xp_Max; i++) { if (i) emit(','); put_attr(X_Attr[i].STR); }
++  emit('\n');
++}
++
++static void cmd_diag(void)
++{
++  const UsbDiag_t *d = UsbCdc_Diag();
++
++  ps("DIAG ISR=");  pn(d->isr);
++  ps(" RST=");      pn(d->rst);
++  ps(" SUSP=");     pn(d->susp);
++  ps(" WKUP=");     pn(d->wkup);
++  ps(" ERR=");      pn(d->err);
++  ps(" FIX=");      pn(d->fix);
++  ps(" ISTR=");     pn(d->istr);
++  ps(" CNTR=");     pn(d->cntr);
++  ps(" ADDR=");     pn(d->daddr);
++  ps(" CFG=");      pn(d->cfg);
++  emit('\n');
++}
++
++static void cmd_cap(u8 bps)
++{
++  cap_bps = bps;
++  if (_Status != RUN) { send_cap(); return; }
++  cap_f0 = UsbFrameCnt;
++  cap_t0 = now20();
++  pend = 1;
++}
++
++static void execute(void)
++{
++  char *t[4];
++  u8 nt = 0, i;
++  char *p = line;
++
++  for (i = 0; line[i]; i++) if (line[i] >= 'a' && line[i] <= 'z') line[i] -= 32;
++  while (nt < 4) {
++    while (*p == ' ' || *p == '\t') p++;
++    if (!*p) break;
++    t[nt++] = p;
++    while (*p && *p != ' ' && *p != '\t') p++;
++    if (*p) *p++ = 0;
++  }
++  while (*p == ' ' || *p == '\t') p++;
++  if (*p) { err("args"); return; }
++  for (i = nt; i < 4; i++) t[i] = (char *)"";
++  if (!nt) return;
++
++  if (!strcmp(t[0], "*IDN?"))       { ps("DS203,Wildcat-CDC," CDC_VERSION "\n"); }
++  else if (!strcmp(t[0], "CH"))     { if (nt == 4) cmd_ch(t); else err("args"); }
++  else if (!strcmp(t[0], "TB"))     { if (nt == 2) cmd_tb(t); else err("args"); }
++  else if (!strcmp(t[0], "MODE"))   { if (nt == 2) cmd_mode(t); else err("args"); }
++  else if (!strcmp(t[0], "TRIG"))   { if (nt == 3) cmd_trig(t); else err("args"); }
++  else if (!strcmp(t[0], "RUN"))    cmd_run();
++  else if (!strcmp(t[0], "STOP"))   { ClearMeters(); _State.Flag |= UPDAT; _Status = HOLD; ok(); }
++  else if (!strcmp(t[0], "STATE?")) cmd_state();
++  else if (!strcmp(t[0], "TABLES?")) cmd_tables();
++  else if (!strcmp(t[0], "DIAG?"))  cmd_diag();
++  else if (!strcmp(t[0], "CAP?"))   cmd_cap(2);
++  else if (!strcmp(t[0], "CAPD?"))  cmd_cap(3);
++  else err("unknown");
++}
++
++void UsbCmd_Poll(void)
++{
++  u8 c;
++
++  if (pend) {
++    txfail = 0;
++    if (_Status != RUN || UsbFrameCnt != cap_f0) { pend = 0; send_cap(); }
++    else if (now20() - cap_t0 > CAP_WAIT_T20)    { pend = 0; err("timeout"); }
++    flush();
++    return;
++  }
++
++  while (!pend && UsbCdc_Read(&c, 1)) {
++    if (c == '\r') continue;
++    if (c != '\n') {
++      if (ln < sizeof line - 1) line[ln++] = c; else overflow = 1;
++      continue;
++    }
++    line[ln] = 0;
++    ln = 0;
++    txfail = 0;
++    if (overflow) { overflow = 0; err("overflow"); } else execute();
++    flush();
++  }
++}
++
++#endif
+diff --git a/WildcatV6.5/build.sh b/WildcatV6.5/build.sh
+new file mode 100755
+index 0000000..0ae5a87
+--- /dev/null
++++ b/WildcatV6.5/build.sh
+@@ -0,0 +1,5 @@
++#!/bin/sh
++# Builds with the Arm toolchain extracted next to the repo; GCC>=14 needs -std=gnu99.
++cd "$(dirname "$0")" || exit 1
++export PATH="$HOME/dev-hobby/ds203/toolchain/bin:$PATH"
++make CFLAGS="-Wall -O2 -I. -Iinc -std=gnu99 -mcpu=cortex-m3 -mthumb -fno-common -fzero-initialized-in-bss -msoft-float -MD -I FWLib/inc" "$@"
+diff --git a/WildcatV6.5/cortexm3_macro.s b/WildcatV6.5/cortexm3_macro.s
+index bd33940..1ba7c57 100644
+--- a/WildcatV6.5/cortexm3_macro.s
++++ b/WildcatV6.5/cortexm3_macro.s
+@@ -49,6 +49,7 @@
+ /*  Input          : None */
+ /*  Return         : None */
+ /* ******************************************************************************* */
++.thumb_func
+ __WFI:
+  
+     WFI
+@@ -60,6 +61,7 @@ __WFI:
+ /*  Input          : None */
+ /*  Return         : None */
+ /* ******************************************************************************* */
++.thumb_func
+ __WFE:
+ 
+     WFE
+@@ -71,6 +73,7 @@ __WFE:
+ /*  Input          : None */
+ /*  Return         : None */
+ /* ******************************************************************************* */
++.thumb_func
+ __SEV:
+ 
+     SEV
+@@ -82,6 +85,7 @@ __SEV:
+ /*  Input          : None */
+ /*  Return         : None */
+ /* ******************************************************************************* */
++.thumb_func
+ __ISB:
+ 
+     ISB
+@@ -93,6 +97,7 @@ __ISB:
+ /*  Input          : None */
+ /*  Return         : None */
+ /* ******************************************************************************* */
++.thumb_func
+ __DSB:
+ 
+     DSB
+@@ -104,6 +109,7 @@ __DSB:
+ /*  Input          : None */
+ /*  Return         : None */
+ /* ******************************************************************************* */
++.thumb_func
+ __DMB:
+ 
+     DMB
+@@ -115,6 +121,7 @@ __DMB:
+ /*  Input          : None */
+ /*  Return         : None */
+ /* ******************************************************************************* */
++.thumb_func
+ __SVC:
+ 
+     SVC 0x01
+@@ -126,6 +133,7 @@ __SVC:
+ /*  Input          : None */
+ /*  Return         : - r0 : Cortex-M3 CONTROL register value. */
+ /* ******************************************************************************* */
++.thumb_func
+ __MRS_CONTROL:
+ 
+   MRS r0, CONTROL
+@@ -137,6 +145,7 @@ __MRS_CONTROL:
+ /*  Input          : - r0 : Cortex-M3 CONTROL register new value.   */
+ /*  Return         : None */
+ /* ******************************************************************************* */
++.thumb_func
+ __MSR_CONTROL:
+ 
+   MSR CONTROL, r0
+@@ -149,6 +158,7 @@ __MSR_CONTROL:
+ /*  Input          : None */
+ /*  Return         : - r0 : Process Stack value. */
+ /* ******************************************************************************* */
++.thumb_func
+ __MRS_PSP:
+ 
+   MRS r0, PSP
+@@ -160,6 +170,7 @@ __MRS_PSP:
+ /*  Input          : - r0 : Process Stack new value.   */
+ /*  Return         : None */
+ /* ******************************************************************************* */
++.thumb_func
+ __MSR_PSP:
+  
+     MSR PSP, r0 /*  set Process Stack value */
+@@ -171,6 +182,7 @@ __MSR_PSP:
+ /*  Input          : None */
+ /*  Return         : - r0 : Main Stack value. */
+ /* ******************************************************************************* */
++.thumb_func
+ __MRS_MSP:
+ 
+   MRS r0, MSP
+@@ -182,6 +194,7 @@ __MRS_MSP:
+ /*  Input          : - r0 : Main Stack new value.   */
+ /*  Return         : None */
+ /* ******************************************************************************* */
++.thumb_func
+ __MSR_MSP:
+  
+     MSR MSP, r0 /*  set Main Stack value */
+@@ -193,6 +206,7 @@ __MSR_MSP:
+ /*  Input          : None  */
+ /*  Return         : None */
+ /* ******************************************************************************* */
++.thumb_func
+ __RESETPRIMASK:
+ 
+   CPSIE i
+@@ -204,6 +218,7 @@ __RESETPRIMASK:
+ /*  Input          : None  */
+ /*  Return         : None */
+ /* ******************************************************************************* */
++.thumb_func
+ __SETPRIMASK:
+ 
+   CPSID i
+@@ -215,6 +230,7 @@ __SETPRIMASK:
+ /*  Input          : None */
+ /*  Return         : - r0 : PRIMASK register value  */
+ /* ******************************************************************************* */
++.thumb_func
+ __READ_PRIMASK:
+  
+   MRS r0, PRIMASK
+@@ -226,6 +242,7 @@ __READ_PRIMASK:
+ /*  Input          : None  */
+ /*  Return         : None */
+ /* ******************************************************************************* */
++.thumb_func
+ __RESETFAULTMASK:
+ 
+   CPSIE f
+@@ -237,6 +254,7 @@ __RESETFAULTMASK:
+ /*  Input          : None  */
+ /*  Return         : None */
+ /* ******************************************************************************* */
++.thumb_func
+ __SETFAULTMASK:
+ 
+   CPSID f
+@@ -248,6 +266,7 @@ __SETFAULTMASK:
+ /*  Input          : None */
+ /*  Return         : - r0 : FAULTMASK register value  */
+ /* ******************************************************************************* */
++.thumb_func
+ __READ_FAULTMASK:
+  
+   MRS r0, FAULTMASK
+@@ -259,6 +278,7 @@ __READ_FAULTMASK:
+ /*  Input          : - r0 : Base Priority new value   */
+ /*  Return         : None */
+ /* ******************************************************************************* */
++.thumb_func
+ __BASEPRICONFIG:
+ 
+   MSR BASEPRI, r0
+@@ -270,6 +290,7 @@ __BASEPRICONFIG:
+ /*  Input          : None  */
+ /*  Return         : - r0 : Base Priority value  */
+ /* ******************************************************************************* */
++.thumb_func
+ __GetBASEPRI:
+ 
+   MRS r0, BASEPRI_MAX
+@@ -281,6 +302,7 @@ __GetBASEPRI:
+ /*  Input          : - r0 : specifies the input variable */
+ /*  Return         : - r0 : holds tve variable value after byte reversing. */
+ /* ******************************************************************************* */
++.thumb_func
+ __REV_HalfWord:
+  
+   REV16 r0, r0
+@@ -292,6 +314,7 @@ __REV_HalfWord:
+ /*  Input          : - r0 : specifies the input variable */
+ /*  Return         : - r0 : holds tve variable value after byte reversing. */
+ /* ******************************************************************************* */
++.thumb_func
+ __REV_Word:
+  
+   REV r0, r0
+diff --git a/WildcatV6.5/inc/UsbCdc.h b/WildcatV6.5/inc/UsbCdc.h
+new file mode 100644
+index 0000000..be28e30
+--- /dev/null
++++ b/WildcatV6.5/inc/UsbCdc.h
+@@ -0,0 +1,20 @@
++#ifndef __USBCDC_H
++#define __USBCDC_H
++
++#include "stm32f10x_type.h"
++
++// 1 = app owns USB and enumerates as CDC-ACM; 0 = stock ROM mass-storage stack
++#define USB_CDC       1
++// 1 = ISR loops received bytes back to the host (prototype); 0 = bytes go to UsbCdc_Read
++#define USB_CDC_ECHO  0
++
++#if USB_CDC
++typedef struct { u16 isr, rst, susp, wkup, err, fix, istr, cntr, daddr; u8 cfg; } UsbDiag_t;
++const UsbDiag_t *UsbCdc_Diag(void);          // counters since boot (u16, wrap); cntr/daddr sampled now
++void UsbCdc_Init(void);
++void UsbCdc_Isr(void);
++int  UsbCdc_Read(u8 *buf, int len);          // returns bytes copied, 0 if none/not configured
++int  UsbCdc_Write(const u8 *buf, int len);   // returns bytes queued (tx ring is 256 B)
++#endif
++
++#endif
+diff --git a/WildcatV6.5/inc/UsbCmd.h b/WildcatV6.5/inc/UsbCmd.h
+new file mode 100644
+index 0000000..9cc810a
+--- /dev/null
++++ b/WildcatV6.5/inc/UsbCmd.h
+@@ -0,0 +1,14 @@
++#ifndef __USBCMD_H
++#define __USBCMD_H
++
++#include "stm32f10x_type.h"
++#include "UsbCdc.h"
++
++#if USB_CDC
++// Incremented by Draw_Window each time it consumes FrameEndFlag; CAP? uses it to detect a finished frame
++extern vu8 UsbFrameCnt;
++// Parse/execute one pending serial command; call from the main loop right after Synchro()
++void UsbCmd_Poll(void);
++#endif
++
++#endif
+-- 
+2.50.1 (Apple Git-155)
+

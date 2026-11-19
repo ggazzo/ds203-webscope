@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>DS203 WebScope Install</title>
+<style>
+:root{--bg:#0f1216;--fg:#e6e9ee;--mut:#9aa4b2;--card:#171c22;--line:#2a323c;--acc:#f5c542;--warn:#ff8a65;--ok:#6fdc8c}
+@media (prefers-color-scheme:light){:root{--bg:#f6f7f9;--fg:#15191e;--mut:#5b6573;--card:#fff;--line:#d9dee5;--acc:#9a6b00;--warn:#b23c17;--ok:#1b7a3a}}
+:root[data-theme=dark]{--bg:#0f1216;--fg:#e6e9ee;--mut:#9aa4b2;--card:#171c22;--line:#2a323c;--acc:#f5c542;--warn:#ff8a65;--ok:#6fdc8c}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.55 system-ui,sans-serif}
+main{max-width:720px;margin:0 auto;padding:32px 16px 64px}
+h1{font-size:1.7rem;margin:0 0 4px}h2{font-size:1.15rem;margin:32px 0 8px}
+p,li{color:var(--fg)}.mut{color:var(--mut)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin:14px 0}
+.warn{border-color:var(--warn)}.warn b{color:var(--warn)}
+code{font:0.9em ui-monospace,Menlo,monospace;background:var(--card);border:1px solid var(--line);border-radius:4px;padding:1px 5px}
+pre{font:0.85em ui-monospace,Menlo,monospace;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px;overflow-x:auto}
+a{color:var(--acc)}
+.btn{display:inline-block;background:var(--acc);color:#111;padding:9px 16px;border-radius:8px;text-decoration:none;font-weight:600;margin:4px 8px 4px 0}
+.btn.alt{background:transparent;color:var(--acc);border:1px solid var(--acc)}
+ol{padding-left:22px}li{margin:6px 0}
+</style>
+</head>
+<body>
+<main>
+<h1>DS203 WebScope</h1>
+<p class="mut">Custom firmware that adds a USB serial port to the Miniware DS203, plus a browser UI that talks to it over Web Serial.</p>
+
+<div class="card warn">
+<b>Experimental.</b> Tested on a single unit. Only for <b>HW 2.81 or newer</b> (it is a patch on top of Wildcat V6.5). Flashing uses the built-in DFU disk, which is normally recoverable, but you do this at your own risk. Keep the original firmware for your hardware before you start.
+</div>
+
+<h2>1. Download</h2>
+<p>
+<a class="btn" href="firmware/app1-cdc.hex" download>app1-cdc.hex</a>
+<a class="btn alt" href="firmware/app1-cdc.hex.sha256">SHA-256</a>
+</p>
+<p class="mut">Built with Arm GNU Toolchain 15.3. It is not byte-identical to upstream Wildcat builds.</p>
+
+<h2>2. Back up a way out</h2>
+<p>Get the original <code>app1.hex</code> for your hardware revision from the
+<a href="https://github.com/Mark-Booth/DS203-DSOQuad">Wildcat repository</a> (<code>WildcatV6.5</code> for HW 2.81+) and keep it. If the new firmware misbehaves, flash that file the same way.</p>
+
+<h2>3. Flash with DFU</h2>
+<ol>
+<li>Power the DS203 off.</li>
+<li>Hold the <code>&gt;||</code> button (button 1) and switch it on while holding. Keep holding.</li>
+<li>Connect it to the computer with a data USB cable. A drive named like <code>DFU V3_xx</code> appears.</li>
+<li>Copy <code>app1-cdc.hex</code> onto the drive, renamed to <code>app1.hex</code>:
+<pre>cp app1-cdc.hex "/Volumes/DFU V3_46_C/app1.hex"</pre></li>
+<li>The drive disappears and comes back with <code>APP1.RDY</code> (success) or <code>APP1.ERR</code> (failed).</li>
+<li>Power the scope off and on again, normally.</li>
+</ol>
+<p class="mut">If you get <code>.ERR</code>, the DFU version may reject big files. The Wildcat install notes describe a split <code>.ADR</code>/<code>.BIN</code> method.</p>
+
+<h2>4. Use it</h2>
+<ol>
+<li>On the scope, open the T-BASE menu (long press button 4, <code>^</code>) and set the trigger mode to <b>AUTO</b>. In TrOFF (SCAN) the time base and mode cannot be changed over USB.</li>
+<li>Open the <a href="index.html">WebScope UI</a> in Chrome or Edge, press <b>Connect</b>, and pick the <code>DS203 CDC</code> port.</li>
+<li>No scope at hand? Press <b>Demo</b> to try the interface with synthetic signals.</li>
+</ol>
+
+<h2>Known issues</h2>
+<ul>
+<li>Capturing while the scope is running times out; the UI works around it with STOP, capture, RUN.</li>
+<li>The USB device sometimes failed to enumerate after boot or replug during development. The cause is not found yet. If it does not show up, reflash or replug.</li>
+<li>Values are raw 8-bit ADC codes. Volts per division and sample rates are not calibrated.</li>
+</ul>
+
+<h2>Source</h2>
+<p><a href="PROTOCOL.md">Serial protocol</a>. The firmware changes are published as a patch (<code>firmware/usb-cdc.patch</code>) against Wildcat commit <code>ef08bdb</code> in the repository.</p>
+</main>
+</body>
+</html>
